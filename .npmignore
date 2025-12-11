@@ -1,0 +1,43 @@
+# Source files
+src/
+examples/
+target/
+Cargo.toml
+Cargo.lock
+build.rs
+tsconfig.json
+
+# Development files
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.travis.yml
+.circleci/
+
+# Documentation (except README)
+docs/
+*.md
+!README.md
+
+# Test files
+test/
+tests/
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+
+# Environment
+.env*
+
+# OS
+.DS_Store
+Thumbs.db
