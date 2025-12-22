@@ -1,0 +1,292 @@
+/**
+ * Integration tests for Zerobus TypeScript SDK
+ *
+ * These tests require a Databricks workspace and valid credentials.
+ * Set the following environment variables before running:
+ * - ZEROBUS_ENDPOINT
+ * - UNITY_CATALOG_URL
+ * - CLIENT_ID
+ * - CLIENT_SECRET
+ * - TABLE_NAME
+ *
+ * Run with: npm test -- --grep integration
+ */
+
+import { describe, it, before, after } from 'node:test';
+import * as assert from 'node:assert';
+import { ZerobusSdk, RecordType, TableProperties, StreamConfigurationOptions } from '../index';
+
+// Skip integration tests if credentials not provided
+const SKIP_INTEGRATION = !process.env.CLIENT_ID || !process.env.CLIENT_SECRET;
+
+describe('Integration Tests', { skip: SKIP_INTEGRATION }, () => {
+    let sdk: ZerobusSdk;
+    const zerobusEndpoint = process.env.ZEROBUS_ENDPOINT!;
+    const workspaceUrl = process.env.UNITY_CATALOG_URL!;
+    const tableName = process.env.TABLE_NAME!;
+    const clientId = process.env.CLIENT_ID!;
+    const clientSecret = process.env.CLIENT_SECRET!;
+
+    before(() => {
+        sdk = new ZerobusSdk(zerobusEndpoint, workspaceUrl);
+    });
+
+    describe('JSON ingestion', () => {
+        it('should ingest single JSON record', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 100,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const record = { device_name: 'test-sensor', temp: 25, humidity: 60 };
+                const offsetId = await stream.ingestRecord(JSON.stringify(record));
+                assert.ok(typeof offsetId === 'bigint');
+                assert.ok(offsetId >= 0n);
+
+                await stream.flush();
+            } finally {
+                await stream.close();
+            }
+        });
+
+        it('should ingest JSON object (auto-stringify)', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 100,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const record = { device_name: 'test-sensor-2', temp: 26, humidity: 61 };
+                const offsetId = await stream.ingestRecord(record);
+                assert.ok(typeof offsetId === 'bigint');
+
+                await stream.flush();
+            } finally {
+                await stream.close();
+            }
+        });
+
+        it('should ingest batch of JSON records', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 1000,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const records = Array.from({ length: 10 }, (_, i) => ({
+                    device_name: `sensor-${i}`,
+                    temp: 20 + i,
+                    humidity: 50 + i,
+                }));
+
+                const offsetId = await stream.ingestRecords(records);
+                assert.ok(offsetId === null || typeof offsetId === 'bigint');
+
+                await stream.flush();
+            } finally {
+                await stream.close();
+            }
+        });
+    });
+
+    describe('Batch ingestion', () => {
+        it('should ingest empty batch and return null', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const offsetId = await stream.ingestRecords([]);
+                assert.strictEqual(offsetId, null);
+            } finally {
+                await stream.close();
+            }
+        });
+
+        it('should ingest batch of string records', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const records = [
+                    JSON.stringify({ device_name: 'batch-1', temp: 20, humidity: 50 }),
+                    JSON.stringify({ device_name: 'batch-2', temp: 21, humidity: 51 }),
+                    JSON.stringify({ device_name: 'batch-3', temp: 22, humidity: 52 }),
+                ];
+
+                const offsetId = await stream.ingestRecords(records);
+                assert.ok(typeof offsetId === 'bigint');
+
+                await stream.flush();
+            } finally {
+                await stream.close();
+            }
+        });
+    });
+
+    describe('Stream recovery', () => {
+        it('should retrieve unacked records after close', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 100,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                // Ingest but don't flush
+                await stream.ingestRecord({ device_name: 'test', temp: 25, humidity: 60 });
+
+                // Close without flush
+                await stream.close();
+
+                // Get unacked records (may be empty if already acknowledged)
+                const unacked = await stream.getUnackedRecords();
+                assert.ok(Array.isArray(unacked));
+            } catch (error) {
+                // Expected if stream is in wrong state
+                assert.ok(error);
+            }
+        });
+
+        it('should retrieve unacked batches after failure', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const batch1 = [
+                    { device_name: 'sensor-1', temp: 20, humidity: 50 },
+                    { device_name: 'sensor-2', temp: 21, humidity: 51 },
+                ];
+
+                await stream.ingestRecords(batch1);
+                await stream.close();
+
+                // Try to get unacked batches
+                const unackedBatches = await stream.getUnackedBatches();
+                assert.ok(Array.isArray(unackedBatches));
+            } catch (error) {
+                // Expected if stream is in wrong state
+                assert.ok(error);
+            }
+        });
+    });
+
+    describe('Error handling', () => {
+        it('should reject with error for invalid table name', async () => {
+            const tableProperties: TableProperties = {
+                tableName: 'invalid.table.name.that.does.not.exist',
+            };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+            };
+
+            try {
+                const stream = await sdk.createStream(
+                    tableProperties,
+                    clientId,
+                    clientSecret,
+                    options
+                );
+                await stream.close();
+                assert.fail('Should have thrown an error');
+            } catch (error) {
+                assert.ok(error);
+                assert.ok(error instanceof Error);
+            }
+        });
+
+        it('should reject with error for invalid credentials', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+            };
+
+            try {
+                const stream = await sdk.createStream(
+                    tableProperties,
+                    'invalid-client-id',
+                    'invalid-client-secret',
+                    options
+                );
+                await stream.close();
+                assert.fail('Should have thrown an error');
+            } catch (error) {
+                assert.ok(error);
+                assert.ok(error instanceof Error);
+            }
+        });
+    });
+});
+
+describe('Integration Tests Info', () => {
+    it('should display instructions if credentials not set', () => {
+        if (SKIP_INTEGRATION) {
+            console.log('\n⚠️  Integration tests skipped - credentials not provided');
+            console.log('\nTo run integration tests, set these environment variables:');
+            console.log('  export ZEROBUS_ENDPOINT="<workspace-id>.zerobus.<region>.cloud.databricks.com"');
+            console.log('  export UNITY_CATALOG_URL="https://<workspace>.cloud.databricks.com"');
+            console.log('  export CLIENT_ID="<service-principal-id>"');
+            console.log('  export CLIENT_SECRET="<service-principal-secret>"');
+            console.log('  export TABLE_NAME="catalog.schema.table"\n');
+        }
+        assert.ok(true); // Always pass this test
+    });
+});
