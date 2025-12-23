@@ -16,18 +16,53 @@ import { describe, it, before, after } from 'node:test';
 import * as assert from 'node:assert';
 import { ZerobusSdk, RecordType, TableProperties, StreamConfigurationOptions } from '../index';
 
-// Skip integration tests if credentials not provided
-const SKIP_INTEGRATION = !process.env.DATABRICKS_CLIENT_ID || !process.env.DATABRICKS_CLIENT_SECRET;
+// Check which environment variables are missing
+const missingEnvVars: string[] = [];
+const requiredEnvVars = {
+    'ZEROBUS_SERVER_ENDPOINT': process.env.ZEROBUS_SERVER_ENDPOINT,
+    'DATABRICKS_WORKSPACE_URL': process.env.DATABRICKS_WORKSPACE_URL,
+    'DATABRICKS_CLIENT_ID': process.env.DATABRICKS_CLIENT_ID,
+    'DATABRICKS_CLIENT_SECRET': process.env.DATABRICKS_CLIENT_SECRET,
+    'ZEROBUS_TABLE_NAME': process.env.ZEROBUS_TABLE_NAME,
+};
+
+for (const [name, value] of Object.entries(requiredEnvVars)) {
+    if (!value) {
+        missingEnvVars.push(name);
+    }
+}
+
+// Skip integration tests if any credentials not provided
+const SKIP_INTEGRATION = missingEnvVars.length > 0;
+
+if (SKIP_INTEGRATION) {
+    console.log('\n⚠️  Integration tests skipped - missing environment variables:');
+    missingEnvVars.forEach(varName => {
+        console.log(`  ✗ ${varName}`);
+    });
+    console.log('\nTo run integration tests, set these environment variables:');
+    console.log('  export ZEROBUS_SERVER_ENDPOINT="<workspace-id>.zerobus.<region>.cloud.databricks.com"');
+    console.log('  export DATABRICKS_WORKSPACE_URL="https://<workspace>.cloud.databricks.com"');
+    console.log('  export DATABRICKS_CLIENT_ID="<service-principal-id>"');
+    console.log('  export DATABRICKS_CLIENT_SECRET="<service-principal-secret>"');
+    console.log('  export ZEROBUS_TABLE_NAME="catalog.schema.table"\n');
+}
 
 describe('Integration Tests', { skip: SKIP_INTEGRATION }, () => {
     let sdk: ZerobusSdk;
-    const zerobusEndpoint = process.env.ZEROBUS_SERVER_ENDPOINT!;
-    const workspaceUrl = process.env.DATABRICKS_WORKSPACE_URL!;
-    const tableName = process.env.ZEROBUS_TABLE_NAME!;
-    const clientId = process.env.DATABRICKS_CLIENT_ID!;
-    const clientSecret = process.env.DATABRICKS_CLIENT_SECRET!
+    const zerobusEndpoint = process.env.ZEROBUS_SERVER_ENDPOINT || '';
+    const workspaceUrl = process.env.DATABRICKS_WORKSPACE_URL || '';
+    const tableName = process.env.ZEROBUS_TABLE_NAME || '';
+    const clientId = process.env.DATABRICKS_CLIENT_ID || '';
+    const clientSecret = process.env.DATABRICKS_CLIENT_SECRET || '';
 
     before(() => {
+        // Skip hook execution if tests are being skipped
+        if (SKIP_INTEGRATION || !zerobusEndpoint || !workspaceUrl) {
+            return;
+        }
+
+        // Initialize SDK for integration tests
         sdk = new ZerobusSdk(zerobusEndpoint, workspaceUrl);
     });
 
@@ -273,20 +308,5 @@ describe('Integration Tests', { skip: SKIP_INTEGRATION }, () => {
                 assert.ok(error instanceof Error);
             }
         });
-    });
-});
-
-describe('Integration Tests Info', () => {
-    it('should display instructions if credentials not set', () => {
-        if (SKIP_INTEGRATION) {
-            console.log('\n⚠️  Integration tests skipped - credentials not provided');
-            console.log('\nTo run integration tests, set these environment variables:');
-            console.log('  export ZEROBUS_SERVER_ENDPOINT="<workspace-id>.zerobus.<region>.cloud.databricks.com"');
-            console.log('  export DATABRICKS_WORKSPACE_URL="https://<workspace>.cloud.databricks.com"');
-            console.log('  export DATABRICKS_CLIENT_ID="<service-principal-id>"');
-            console.log('  export DATABRICKS_CLIENT_SECRET="<service-principal-secret>"');
-            console.log('  export ZEROBUS_TABLE_NAME="catalog.schema.table"\n');
-        }
-        assert.ok(true); // Always pass this test
     });
 });
