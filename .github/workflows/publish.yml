@@ -20,12 +20,8 @@ jobs:
             target: x86_64-unknown-linux-musl
           - host: linux-ubuntu-latest
             target: aarch64-unknown-linux-gnu
-          - host: linux-ubuntu-latest
-            target: aarch64-unknown-linux-musl
           - host: windows-server-latest
             target: x86_64-pc-windows-msvc
-          - host: windows-server-latest
-            target: aarch64-pc-windows-msvc
 
     name: Build - ${{ matrix.settings.target }}
     runs-on:
@@ -58,11 +54,19 @@ jobs:
       - name: Add Rust target
         run: rustup target add ${{ matrix.settings.target }}
 
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.settings.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
       - name: Install dependencies
         run: npm ci
 
       - name: Build
         run: npm run build --target ${{ matrix.settings.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
