@@ -1,10 +1,10 @@
 # Databricks Zerobus Ingest SDK for TypeScript
 
-[Private Preview](https://docs.databricks.com/release-notes/release-types.html): This SDK is supported for production use cases and is available to all customers. Databricks is actively working on stabilizing the Zerobus Ingest SDK for TypeScript. Minor version updates may include backwards-incompatible changes.
+[Public Preview](https://docs.databricks.com/release-notes/release-types.html): This SDK is supported for production use cases and is available to all customers. Databricks is actively working on stabilizing the Zerobus Ingest SDK for TypeScript. Minor version updates may include backwards-incompatible changes.
 
 We are keen to hear feedback from you on this SDK. Please [file issues](https://github.com/databricks/zerobus-sdk-ts/issues), and we will address them.
 
-The Databricks Zerobus Ingest SDK for TypeScript provides a high-performance client for ingesting data directly into Databricks Delta tables using the Zerobus streaming protocol. This SDK wraps the high-performance [Rust SDK](https://github.com/databricks/zerobus-sdk-rs) using native bindings for optimal performance. | See also the [SDK for Rust](https://github.com/databricks/zerobus-sdk-rs) | See also the [SDK for Python](https://github.com/databricks/zerobus-sdk-py) | See also the [SDK for Java](https://github.com/databricks/zerobus-sdk-java)
+The Databricks Zerobus Ingest SDK for TypeScript provides a high-performance client for ingesting data directly into Databricks Delta tables using the Zerobus streaming protocol. This SDK wraps the high-performance [Rust SDK](https://github.com/databricks/zerobus-sdk-rs) using native bindings for optimal performance. | See also the [SDK for Rust](https://github.com/databricks/zerobus-sdk-rs) | See also the [SDK for Python](https://github.com/databricks/zerobus-sdk-py) | See also the [SDK for Java](https://github.com/databricks/zerobus-sdk-java) | See also the [SDK for Go](https://github.com/databricks/zerobus-sdk-go)
 
 ## Table of Contents
 
@@ -14,16 +14,19 @@ The Databricks Zerobus Ingest SDK for TypeScript provides a high-performance cli
   - [Prerequisites](#prerequisites)
   - [Installation](#installation)
   - [Choose Your Serialization Format](#choose-your-serialization-format)
-  - [Option 1: Using JSON (Simplest)](#option-1-using-json-simplest)
-  - [Option 2: Using Protocol Buffers](#option-2-using-protocol-buffers)
+  - [Option 1: Using JSON (Quick Start)](#option-1-using-json-quick-start)
+  - [Option 2: Using Protocol Buffers (Default, Recommended)](#option-2-using-protocol-buffers-default-recommended)
 - [Usage Examples](#usage-examples)
 - [Authentication](#authentication)
 - [Configuration](#configuration)
+- [Descriptor Utilities](#descriptor-utilities)
 - [Error Handling](#error-handling)
 - [API Reference](#api-reference)
 - [Best Practices](#best-practices)
 - [Platform Support](#platform-support)
 - [Architecture](#architecture)
+- [Contributing](#contributing)
+- [Related Projects](#related-projects)
 
 ## Features
 
@@ -258,8 +261,8 @@ const workspaceUrl = 'https://<workspace-name>.cloud.databricks.com';
 // const workspaceUrl = 'https://<workspace-name>.azuredatabricks.net';
 
 const tableName = 'main.default.air_quality';
-const clientId = process.env.CLIENT_ID!;
-const clientSecret = process.env.CLIENT_SECRET!;
+const clientId = process.env.DATABRICKS_CLIENT_ID!;
+const clientSecret = process.env.DATABRICKS_CLIENT_SECRET!;
 
 // Initialize SDK
 const sdk = new ZerobusSdk(zerobusEndpoint, workspaceUrl);
@@ -428,8 +431,8 @@ import { loadDescriptorProto } from '@databricks/zerobus-ingest-sdk/utils/descri
 const zerobusEndpoint = '<workspace-id>.zerobus.<region>.cloud.databricks.com';
 const workspaceUrl = 'https://<workspace-name>.cloud.databricks.com';
 const tableName = 'main.default.air_quality';
-const clientId = process.env.CLIENT_ID!;
-const clientSecret = process.env.CLIENT_SECRET!;
+const clientId = process.env.DATABRICKS_CLIENT_ID!;
+const clientSecret = process.env.DATABRICKS_CLIENT_SECRET!;
 
 // Load and extract the descriptor for your specific message
 const descriptorBase64 = loadDescriptorProto({
@@ -630,11 +633,11 @@ See the `examples/` directory for complete, runnable examples. See [examples/REA
 
 ```bash
 # Set environment variables
-export ZEROBUS_ENDPOINT="<workspace-id>.zerobus.<region>.cloud.databricks.com"
-export UNITY_CATALOG_URL="https://<workspace-name>.cloud.databricks.com"
-export CLIENT_ID="your-client-id"
-export CLIENT_SECRET="your-client-secret"
-export TABLE_NAME="main.default.air_quality"
+export ZEROBUS_SERVER_ENDPOINT="<workspace-id>.zerobus.<region>.cloud.databricks.com"
+export DATABRICKS_WORKSPACE_URL="https://<workspace-name>.cloud.databricks.com"
+export DATABRICKS_CLIENT_ID="your-client-id"
+export DATABRICKS_CLIENT_SECRET="your-client-secret"
+export ZEROBUS_TABLE_NAME="main.default.air_quality"
 
 # Run JSON example
 npx tsx examples/json.ts

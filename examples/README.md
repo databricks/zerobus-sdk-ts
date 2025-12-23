@@ -43,17 +43,17 @@ Set the following environment variables:
 
 ```bash
 # Required for all examples
-export CLIENT_ID="your-service-principal-application-id"
-export CLIENT_SECRET="your-service-principal-secret"
-export TABLE_NAME="catalog.schema.table"
+export DATABRICKS_CLIENT_ID="your-service-principal-application-id"
+export DATABRICKS_CLIENT_SECRET="your-service-principal-secret"
+export ZEROBUS_TABLE_NAME="catalog.schema.table"
 
 # For AWS
-export ZEROBUS_ENDPOINT="workspace-id.zerobus.region.cloud.databricks.com"
-export UNITY_CATALOG_URL="https://your-workspace.cloud.databricks.com"
+export ZEROBUS_SERVER_ENDPOINT="workspace-id.zerobus.region.cloud.databricks.com"
+export DATABRICKS_WORKSPACE_URL="https://your-workspace.cloud.databricks.com"
 
 # For Azure
-export ZEROBUS_ENDPOINT="workspace-id.zerobus.region.azuredatabricks.net"
-export UNITY_CATALOG_URL="https://your-workspace.azuredatabricks.net"
+export ZEROBUS_SERVER_ENDPOINT="workspace-id.zerobus.region.azuredatabricks.net"
+export DATABRICKS_WORKSPACE_URL="https://your-workspace.azuredatabricks.net"
 ```
 
 ## Running Examples
