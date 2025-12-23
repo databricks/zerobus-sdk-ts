@@ -8,7 +8,7 @@
 import { describe, it, before } from 'node:test';
 import * as assert from 'node:assert';
 import { ZerobusSdk, RecordType, TableProperties, StreamConfigurationOptions } from '../index';
-import { HeadersProvider } from '../src/providers';
+import { HeadersProvider } from '../src/headers_provider';
 
 describe('ZerobusSdk', () => {
     describe('constructor', () => {
