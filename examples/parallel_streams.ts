@@ -113,11 +113,11 @@ async function worker(
 }
 
 async function main() {
-    const zerobusEndpoint = process.env.ZEROBUS_ENDPOINT || 'https://your-workspace-id.zerobus.region.cloud.databricks.com';
-    const unityCatalogUrl = process.env.UNITY_CATALOG_URL || 'https://your-workspace.cloud.databricks.com';
-    const clientId = process.env.CLIENT_ID || 'your-client-id';
-    const clientSecret = process.env.CLIENT_SECRET || 'your-client-secret';
-    const tableName = process.env.TABLE_NAME || 'catalog.schema.table';
+    const zerobusEndpoint = process.env.ZEROBUS_SERVER_ENDPOINT || 'https://your-workspace-id.zerobus.region.cloud.databricks.com';
+    const unityCatalogUrl = process.env.DATABRICKS_WORKSPACE_URL || 'https://your-workspace.cloud.databricks.com';
+    const clientId = process.env.DATABRICKS_CLIENT_ID || 'your-client-id';
+    const clientSecret = process.env.DATABRICKS_CLIENT_SECRET || 'your-client-secret';
+    const tableName = process.env.ZEROBUS_TABLE_NAME || 'catalog.schema.table';
 
     console.log(`Starting parallel ingestion with ${NUM_WORKERS} workers...`);
     console.log(`Total records: ${TOTAL_RECORDS}`);

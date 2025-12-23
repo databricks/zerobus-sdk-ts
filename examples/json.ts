@@ -13,11 +13,11 @@
 import { ZerobusSdk, StreamConfigurationOptions, TableProperties, RecordType } from '../index';
 
 // Configuration
-const ZEROBUS_ENDPOINT = process.env.ZEROBUS_ENDPOINT || 'your-workspace-id.zerobus.region.cloud.databricks.com';
-const UNITY_CATALOG_URL = process.env.UNITY_CATALOG_URL || 'https://your-workspace.cloud.databricks.com';
-const TABLE_NAME = process.env.TABLE_NAME || 'catalog.schema.table';
-const CLIENT_ID = process.env.CLIENT_ID || 'your-oauth-client-id';
-const CLIENT_SECRET = process.env.CLIENT_SECRET || 'your-oauth-client-secret';
+const ZEROBUS_ENDPOINT = process.env.ZEROBUS_SERVER_ENDPOINT || 'your-workspace-id.zerobus.region.cloud.databricks.com';
+const UNITY_CATALOG_URL = process.env.DATABRICKS_WORKSPACE_URL || 'https://your-workspace.cloud.databricks.com';
+const TABLE_NAME = process.env.ZEROBUS_TABLE_NAME || 'catalog.schema.table';
+const CLIENT_ID = process.env.DATABRICKS_CLIENT_ID || 'your-oauth-client-id';
+const CLIENT_SECRET = process.env.DATABRICKS_CLIENT_SECRET || 'your-oauth-client-secret';
 
 async function main() {
     console.log('JSON Ingestion Example');
@@ -25,17 +25,17 @@ async function main() {
 
     // Validate configuration
     if (CLIENT_ID === 'your-oauth-client-id' || CLIENT_SECRET === 'your-oauth-client-secret') {
-        console.error('Error: Please set CLIENT_ID and CLIENT_SECRET environment variables');
+        console.error('Error: Please set DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET environment variables');
         return;
     }
 
     if (ZEROBUS_ENDPOINT === 'your-workspace-id.zerobus.region.cloud.databricks.com') {
-        console.error('Error: Please set ZEROBUS_ENDPOINT environment variable');
+        console.error('Error: Please set ZEROBUS_SERVER_ENDPOINT environment variable');
         return;
     }
 
     if (TABLE_NAME === 'catalog.schema.table') {
-        console.error('Error: Please set TABLE_NAME environment variable');
+        console.error('Error: Please set ZEROBUS_TABLE_NAME environment variable');
         return;
     }
 
