@@ -37,7 +37,29 @@ This generates:
 - `examples/generated/air_quality.d.ts` - Type definitions
 - `schemas/air_quality_descriptor.pb` - Descriptor file for SDK
 
-### 3. Configure Credentials
+### 3. Create a Databricks Table
+
+Before running the examples, create a table in your Databricks workspace using the following SQL:
+
+```sql
+CREATE TABLE catalog.schema.air_quality (
+    device_name STRING,
+    temp INT,
+    humidity BIGINT
+)
+USING DELTA;
+```
+
+Replace `catalog.schema.air_quality` with your actual catalog, schema, and table name.
+
+**Note:** This schema matches the examples (`json.ts` and `proto.ts`). The examples use these fields:
+- `device_name` (STRING) - Sensor device identifier
+- `temp` (INT) - Temperature reading
+- `humidity` (BIGINT) - Humidity reading
+
+If you modify the table schema, make sure to update the example code and Protocol Buffer schema (`schemas/air_quality.proto`) accordingly.
+
+### 4. Configure Credentials
 
 Set the following environment variables:
 
