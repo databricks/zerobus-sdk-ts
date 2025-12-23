@@ -50,11 +50,22 @@ jobs:
           node-version: 20
           cache: 'npm'
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: ${{ matrix.settings.target }}
+      - name: Install Rust (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install Rust (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain stable
+          echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.settings.target }}
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -97,8 +108,19 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm'
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install Rust (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          Invoke-WebRequest -Uri https://win.rustup.rs/x86_64 -OutFile rustup-init.exe
+          .\rustup-init.exe -y --default-toolchain stable
+          echo "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        shell: powershell
 
       - name: Install dependencies
         run: npm ci
