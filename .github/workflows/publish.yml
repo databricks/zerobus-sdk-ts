@@ -90,16 +90,12 @@ jobs:
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
-        with:
-          path: artifacts
 
-      - name: Flatten artifacts
-        run: |
-          find artifacts -name '*.node' -exec mv {} . \;
-          ls -la *.node
+      - name: List downloaded artifacts
+        run: ls -la
 
       - name: Move artifacts
-        run: npm run artifacts
+        run: napi artifacts
 
       - name: List packages
         run: ls -R ./npm
