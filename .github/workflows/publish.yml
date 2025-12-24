@@ -4,6 +4,10 @@ on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build:
     strategy:
@@ -90,20 +94,40 @@ jobs:
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
       - name: List downloaded artifacts
-        run: ls -la
-
-      - name: Prepare npm packages
-        run: npx napi prepublish -t npm
+        run: ls -R artifacts/
 
       - name: Move artifacts to npm packages
-        run: npx napi artifacts
+        run: |
+          # Create npm directories for each platform we're building
+          mkdir -p npm/linux-x64-gnu npm/linux-arm64-gnu npm/win32-x64-msvc
+
+          # Copy artifacts to correct locations
+          cp artifacts/bindings-x86_64-unknown-linux-gnu/*.node npm/linux-x64-gnu/
+          cp artifacts/bindings-aarch64-unknown-linux-gnu/*.node npm/linux-arm64-gnu/
+          cp artifacts/bindings-x86_64-pc-windows-msvc/*.node npm/win32-x64-msvc/
+
+          # Create package.json for each platform package
+          for dir in npm/*/; do
+            platform=$(basename "$dir")
+            cat > "$dir/package.json" << EOF
+          {
+            "name": "@databricks/zerobus-sdk-$platform",
+            "version": "0.1.0",
+            "os": ["${platform%%-*}"],
+            "cpu": ["${platform#*-}"],
+            "main": "zerobus-sdk-ts.$platform.node"
+          }
+          EOF
+          done
 
       - name: List packages
         run: ls -R ./npm
 
       - name: Publish
-        run: npm publish --access public --ignore-scripts
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
