@@ -1,0 +1,9 @@
+{
+  "name": "@databricks/zerobus-ingest-sdk-win32-x64-msvc",
+  "version": "0.1.1",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "main": "zerobus-ingest-sdk.win32-x64-msvc.node",
+  "files": ["zerobus-ingest-sdk.win32-x64-msvc.node"],
+  "license": "Databricks License"
+}

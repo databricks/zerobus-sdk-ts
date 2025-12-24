@@ -1,0 +1,9 @@
+{
+  "name": "@databricks/zerobus-ingest-sdk-linux-arm64-gnu",
+  "version": "0.1.1",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "main": "zerobus-ingest-sdk.linux-arm64-gnu.node",
+  "files": ["zerobus-ingest-sdk.linux-arm64-gnu.node"],
+  "license": "Databricks License"
+}
