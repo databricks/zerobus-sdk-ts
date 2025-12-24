@@ -123,5 +123,4 @@ jobs:
         run: npm run build:debug
 
       - name: Test
-        run: npm test
-        if: matrix.os != 'windows-server-latest'
+        run: npm run test:unit

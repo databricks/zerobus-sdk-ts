@@ -200,6 +200,8 @@ source $HOME/.cargo/env
 
 #### Installation Steps
 
+**Note for macOS users**: Pre-built binaries are not available. The package will automatically build from source during `npm install`. Ensure you have Rust toolchain and Xcode Command Line Tools installed (see prerequisites above).
+
 1. Extract the SDK package:
    ```bash
    unzip zerobus-sdk-ts.zip
@@ -1161,13 +1163,23 @@ enum RecordType {
 
 ## Platform Support
 
-The SDK supports all platforms where Node.js and Rust are available:
+The SDK supports all platforms where Node.js and Rust are available.
 
-- **Linux**: x64, ARM64 (glibc and musl variants)
-- **macOS**: x64 (Intel), ARM64 (Apple Silicon)
-- **Windows**: x64, ARM64
+### Pre-built Binaries
 
-The native addon will be compiled for your specific platform during installation.
+Pre-built native binaries are available for:
+
+- **Linux**: x64, ARM64
+- **Windows**: x64
+
+### Build from Source
+
+**macOS users**: Pre-built binaries are not available for macOS. The package will automatically build from source during `npm install`, which requires:
+
+- **Rust toolchain** (1.70+): Install via `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- **Xcode Command Line Tools**: Install via `xcode-select --install`
+
+The build process happens automatically during installation and typically takes 2-3 minutes.
 
 ## Architecture
 
