@@ -93,6 +93,11 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten artifacts
+        run: |
+          find artifacts -name '*.node' -exec mv {} . \;
+          ls -la *.node
+
       - name: Move artifacts
         run: npm run artifacts
 
