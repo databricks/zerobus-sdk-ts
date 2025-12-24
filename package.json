@@ -1,6 +1,6 @@
 {
   "name": "@databricks/zerobus-ingest-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TypeScript/Node.js SDK for streaming data ingestion into Databricks Delta tables using Zerobus",
   "main": "index.js",
   "types": "index.d.ts",
@@ -32,7 +32,7 @@
     "*.node"
   ],
   "napi": {
-    "name": "zerobus-sdk-ts",
+    "name": "zerobus-ingest-sdk",
     "triples": {
       "defaults": true,
       "additional": [
@@ -82,13 +82,12 @@
     "glob": "^10.0.0"
   },
   "optionalDependencies": {
-    "@databricks/zerobus-sdk-darwin-arm64": "0.0.1",
-    "@databricks/zerobus-sdk-darwin-x64": "0.0.1",
-    "@databricks/zerobus-sdk-linux-arm64-gnu": "0.0.1",
-    "@databricks/zerobus-sdk-linux-arm64-musl": "0.0.1",
-    "@databricks/zerobus-sdk-linux-x64-gnu": "0.0.1",
-    "@databricks/zerobus-sdk-linux-x64-musl": "0.0.1",
-    "@databricks/zerobus-sdk-win32-arm64-msvc": "0.0.1",
-    "@databricks/zerobus-sdk-win32-x64-msvc": "0.0.1"
+    "@databricks/zerobus-ingest-sdk-win32-x64-msvc": "0.1.1",
+    "@databricks/zerobus-ingest-sdk-darwin-x64": "0.1.1",
+    "@databricks/zerobus-ingest-sdk-linux-x64-gnu": "0.1.1",
+    "@databricks/zerobus-ingest-sdk-linux-x64-musl": "0.1.1",
+    "@databricks/zerobus-ingest-sdk-linux-arm64-gnu": "0.1.1",
+    "@databricks/zerobus-ingest-sdk-darwin-arm64": "0.1.1",
+    "@databricks/zerobus-ingest-sdk-linux-arm64-musl": "0.1.1"
   }
 }
