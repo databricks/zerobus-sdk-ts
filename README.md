@@ -482,7 +482,7 @@ When creating your proto schema, use these type mappings:
 | Delta Type | Proto2 Type | Notes |
 |-----------|-------------|-------|
 | STRING, VARCHAR | string | |
-| INT, SMALLINT, SHORT | int32 | |
+| INT, SMALLINT, SHORT, BYTE, TINYINT | int32 | |
 | BIGINT, LONG | int64 | |
 | FLOAT | float | |
 | DOUBLE | double | |
@@ -490,6 +490,8 @@ When creating your proto schema, use these type mappings:
 | BINARY | bytes | |
 | DATE | int32 | Days since epoch |
 | TIMESTAMP | int64 | Microseconds since epoch |
+| TIMESTAMP_NTZ | int64 | Microseconds since epoch |
+| VARIANT | string | Written as unshredded variant to Delta |
 | ARRAY\<type\> | repeated type | Use repeated field |
 | MAP\<key, value\> | map\<key, value\> | Use map field |
 | STRUCT\<fields\> | message | Define nested message |
