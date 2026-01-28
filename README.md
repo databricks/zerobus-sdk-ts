@@ -288,35 +288,24 @@ const stream = await sdk.createStream(
 );
 
 try {
-    let lastAckPromise;
+    let lastOffset: bigint;
 
     // Send all records
     for (let i = 0; i < 100; i++) {
-        // Create JSON record
         const record = {
             device_name: `sensor-${i % 10}`,
             temp: 20 + (i % 15),
             humidity: 50 + (i % 40)
         };
 
-        // JSON supports 2 types:
-        // 1. object (high-level) - SDK auto-stringifies
-        lastAckPromise = stream.ingestRecord(record);
-        // 2. string (low-level) - pre-serialized JSON
-        // lastAckPromise = stream.ingestRecord(JSON.stringify(record));
+        // ingestRecordOffset returns immediately after queuing
+        lastOffset = await stream.ingestRecordOffset(record);
     }
 
-    console.log('All records sent. Waiting for last acknowledgment...');
-
-    // Wait for the last record's acknowledgment
-    const lastOffset = await lastAckPromise;
-    console.log(`Last record offset: ${lastOffset}`);
-
-    // Flush to ensure all records are acknowledged
-    await stream.flush();
+    // Wait for all records to be acknowledged
+    await stream.waitForOffset(lastOffset);
     console.log('Successfully ingested 100 records!');
 } finally {
-    // Always close the stream
     await stream.close();
 }
 ```
@@ -464,7 +453,7 @@ const stream = await sdk.createStream(tableProperties, clientId, clientSecret, o
 
 try {
     const AirQuality = airQuality.examples.AirQuality;
-    let lastAckPromise;
+    let lastOffset: bigint;
 
     // Send all records
     for (let i = 0; i < 100; i++) {
@@ -474,22 +463,12 @@ try {
             humidity: 50 + i
         });
 
-        // Protobuf supports 2 types:
-        // 1. Message object (high-level) - SDK calls .encode().finish()
-        lastAckPromise = stream.ingestRecord(record);
-        // 2. Buffer (low-level) - pre-serialized bytes
-        // const buffer = Buffer.from(AirQuality.encode(record).finish());
-        // lastAckPromise = stream.ingestRecord(buffer);
+        // ingestRecordOffset returns immediately after queuing
+        lastOffset = await stream.ingestRecordOffset(record);
     }
 
-    console.log('All records sent. Waiting for last acknowledgment...');
-
-    // Wait for the last record's acknowledgment
-    const lastOffset = await lastAckPromise;
-    console.log(`Last record offset: ${lastOffset}`);
-
-    // Flush to ensure all records are acknowledged
-    await stream.flush();
+    // Wait for all records to be acknowledged
+    await stream.waitForOffset(lastOffset);
     console.log('Successfully ingested 100 records!');
 } finally {
     await stream.close();
@@ -666,13 +645,14 @@ const records = Array.from({ length: 1000 }, (_, i) =>
 );
 
 // Protobuf Type 1: Message objects (high-level) - SDK auto-serializes
-const offsetId = await stream.ingestRecords(records);
+const offsetId = await stream.ingestRecordsOffset(records);
 
 // Protobuf Type 2: Buffers (low-level) - pre-serialized bytes
 // const buffers = records.map(r => Buffer.from(AirQuality.encode(r).finish()));
-// const offsetId = await stream.ingestRecords(buffers);
+// const offsetId = await stream.ingestRecordsOffset(buffers);
 
 if (offsetId !== null) {
+  await stream.waitForOffset(offsetId);
   console.log(`Batch acknowledged at offset ${offsetId}`);
 }
 ```
@@ -687,11 +667,15 @@ const records = Array.from({ length: 1000 }, (_, i) => ({
 }));
 
 // JSON Type 1: objects (high-level) - SDK auto-stringifies
-const offsetId = await stream.ingestRecords(records);
+const offsetId = await stream.ingestRecordsOffset(records);
 
 // JSON Type 2: strings (low-level) - pre-serialized JSON
 // const jsonRecords = records.map(r => JSON.stringify(r));
-// const offsetId = await stream.ingestRecords(jsonRecords);
+// const offsetId = await stream.ingestRecordsOffset(jsonRecords);
+
+if (offsetId !== null) {
+  await stream.waitForOffset(offsetId);
+}
 ```
 
 **Type Widening Support:**
@@ -838,7 +822,8 @@ The SDK includes automatic recovery for transient failures (enabled by default w
 
 ```typescript
 try {
-    const offset = await stream.ingestRecord(JSON.stringify(record));
+    const offset = await stream.ingestRecordOffset(record);
+    await stream.waitForOffset(offset);
     console.log(`Success: offset ${offset}`);
 } catch (error) {
     console.error('Ingestion failed:', error);
@@ -1194,7 +1179,7 @@ enum RecordType {
 4. **Error handling**: The stream handles errors internally with automatic retry. Only use `recreateStream()` for persistent failures after internal retries are exhausted.
 5. **Use Protocol Buffers for production**: Protocol Buffers (the default) provides better performance and schema validation. Use JSON only when you need schema flexibility or for quick prototyping.
 6. **Store credentials securely**: Use environment variables, never hardcode credentials
-7. **Use batch ingestion**: For high-throughput scenarios, use `ingestRecords()` instead of individual `ingestRecord()` calls
+7. **Use batch ingestion**: For high-throughput scenarios, use `ingestRecordsOffset()` instead of individual `ingestRecordOffset()` calls
 
 ## Platform Support
 
