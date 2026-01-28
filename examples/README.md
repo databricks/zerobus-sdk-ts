@@ -141,21 +141,24 @@ await stream.close();
 
 The SDK provides two API styles for ingestion:
 
-| Style | Method | Returns | When to wait |
-|-------|--------|---------|--------------|
-| **Offset-based** (Recommended) | `ingestRecordOffset()` | `bigint` directly | Call `waitForOffset()` when needed |
-| **Future-based** (Deprecated) | `ingestRecord()` | `Promise<bigint>` | Await the promise |
+| Style | Method | Returns | Promise resolves |
+|-------|--------|---------|------------------|
+| **Offset-based** (Recommended) | `ingestRecordOffset()` | `Promise<bigint>` | Immediately after queuing (before server ack) |
+| **Future-based** (Deprecated) | `ingestRecord()` | `Promise<bigint>` | After server acknowledgment |
+
+Both methods return `Promise<bigint>`, but the key difference is **when** the promise resolves:
 
 **Offset-based (Recommended):**
 ```typescript
+// Promise resolves immediately with offset (doesn't wait for server ack)
 const offset = await stream.ingestRecordOffset(data);
-// Do other work, then wait when needed
+// Do other work, then wait for acknowledgment when needed
 await stream.waitForOffset(offset);
 ```
 
 **Future-based (Deprecated):**
 ```typescript
-// Must await to get offset - blocks until acknowledged
+// Promise blocks until server acknowledges - slower for high-throughput
 const offset = await stream.ingestRecord(data);
 ```
 

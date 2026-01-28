@@ -940,13 +940,13 @@ Represents an active ingestion stream.
 async ingestRecordOffset(payload: Buffer | string | object): Promise<bigint>
 ```
 
-**(Recommended)** Ingests a single record and returns the offset ID immediately after queuing. Use `waitForOffset()` to wait for acknowledgment when needed.
+**(Recommended)** Ingests a single record. The Promise resolves immediately after the record is queued (before server acknowledgment). Use `waitForOffset()` to wait for acknowledgment when needed.
 
 ```typescript
 // High-throughput pattern: send many, wait once
-const offset1 = await stream.ingestRecordOffset(record1);
-const offset2 = await stream.ingestRecordOffset(record2);
-await stream.waitForOffset(offset2);  // Waits for all records up to offset2
+const offset1 = await stream.ingestRecordOffset(record1);  // Resolves immediately
+const offset2 = await stream.ingestRecordOffset(record2);  // Resolves immediately
+await stream.waitForOffset(offset2);  // Waits for server to acknowledge all records up to offset2
 ```
 
 ---
@@ -955,7 +955,7 @@ await stream.waitForOffset(offset2);  // Waits for all records up to offset2
 async ingestRecordsOffset(payloads: Array<Buffer | string | object>): Promise<bigint | null>
 ```
 
-**(Recommended)** Ingests multiple records as a batch and returns the offset ID immediately after queuing. Returns `null` for empty batches.
+**(Recommended)** Ingests multiple records as a batch. The Promise resolves immediately after the batch is queued (before server acknowledgment). Returns `null` for empty batches.
 
 ---
 
@@ -973,7 +973,7 @@ async ingestRecord(payload: Buffer | string | object): Promise<bigint>
 
 **@deprecated** Use `ingestRecordOffset()` instead.
 
-Ingests a single record. This method **blocks** until the record is sent to the SDK's internal landing zone, then returns a Promise for the server acknowledgment. This allows you to send many records without waiting for individual acknowledgments.
+Ingests a single record. Unlike `ingestRecordOffset()`, the Promise only resolves **after the server acknowledges** the record. This is slower for high-throughput scenarios.
 
 **Parameters:**
 - `payload` - Record data. The SDK supports 4 input types for flexibility:
@@ -1013,7 +1013,7 @@ async ingestRecords(payloads: Array<Buffer | string | object>): Promise<bigint |
 
 **@deprecated** Use `ingestRecordsOffset()` instead.
 
-Ingests multiple records as a batch. All records in a batch are acknowledged together atomically. This method **blocks** until all records are sent to the SDK's internal landing zone, then returns a Promise for the server acknowledgment.
+Ingests multiple records as a batch. Unlike `ingestRecordsOffset()`, the Promise only resolves **after the server acknowledges** the batch. This is slower for high-throughput scenarios.
 
 **Parameters:**
 - `payloads` - Array of record data. Supports the same 4 types as `ingestRecord()`:

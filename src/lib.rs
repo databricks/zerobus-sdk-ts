@@ -427,9 +427,9 @@ impl ZerobusStream {
         )
     }
 
-    /// Ingests a single record and returns the offset ID directly after queuing.
+    /// Ingests a single record and returns a future that resolves to the offset ID after queuing.
     ///
-    /// Unlike `ingestRecord()`, this method returns the offset ID immediately after
+    /// Unlike `ingestRecord()`, this method's Promise resolves immediately after
     /// the record is queued, without waiting for server acknowledgment. Use
     /// `waitForOffset()` to wait for acknowledgment when needed.
     ///
@@ -442,11 +442,13 @@ impl ZerobusStream {
     ///
     /// # Returns
     ///
-    /// The offset ID (bigint) assigned to this record.
+    /// `Promise<bigint>` - Resolves to the offset ID immediately after the record is queued
+    /// (does not wait for server acknowledgment).
     ///
     /// # Example
     ///
     /// ```typescript
+    /// // Promise resolves immediately with offset (before server ack)
     /// const offset1 = await stream.ingestRecordOffset(record1);
     /// const offset2 = await stream.ingestRecordOffset(record2);
     /// // Wait for both to be acknowledged
@@ -480,9 +482,9 @@ impl ZerobusStream {
         )
     }
 
-    /// Ingests multiple records as a batch and returns the offset ID directly after queuing.
+    /// Ingests multiple records as a batch and returns a future that resolves to the offset ID after queuing.
     ///
-    /// Unlike `ingestRecords()`, this method returns the offset ID immediately after
+    /// Unlike `ingestRecords()`, this method's Promise resolves immediately after
     /// the batch is queued, without waiting for server acknowledgment. Use
     /// `waitForOffset()` to wait for acknowledgment when needed.
     ///
@@ -492,11 +494,13 @@ impl ZerobusStream {
     ///
     /// # Returns
     ///
-    /// The offset ID (bigint) for the batch, or null for empty batches.
+    /// `Promise<bigint | null>` - Resolves to the offset ID immediately after the batch
+    /// is queued (does not wait for server acknowledgment). Returns null for empty batches.
     ///
     /// # Example
     ///
     /// ```typescript
+    /// // Promise resolves immediately with offset (before server ack)
     /// const offset = await stream.ingestRecordsOffset(batch);
     /// if (offset !== null) {
     ///   await stream.waitForOffset(offset);
@@ -798,7 +802,6 @@ async fn call_headers_tsfn(tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal>) -
 
 /// OAuth headers provider for TypeScript SDK.
 /// Uses the Rust SDK's token factory but with the TS user agent.
-/// No memory leaks - all header keys are static string literals.
 struct TsOAuthHeadersProvider {
     client_id: String,
     client_secret: String,
