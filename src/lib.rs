@@ -13,7 +13,6 @@
 #![deny(clippy::all)]
 
 use napi::bindgen_prelude::*;
-use napi::threadsafe_function::{ThreadsafeFunction, ErrorStrategy};
 use napi::{Env, JsObject, JsFunction, JsUnknown, JsString, JsGlobal, ValueType};
 use napi_derive::napi;
 
@@ -23,8 +22,8 @@ use databricks_zerobus_ingest_sdk::{
     TableProperties as RustTableProperties, ZerobusSdk as RustZerobusSdk,
     ZerobusStream as RustZerobusStream,
     HeadersProvider as RustHeadersProvider,
-    ZerobusError as RustZerobusError,
     ZerobusResult as RustZerobusResult,
+    DefaultTokenFactory,
 };
 use databricks_zerobus_ingest_sdk::databricks::zerobus::RecordType as RustRecordType;
 use async_trait::async_trait;
@@ -32,6 +31,9 @@ use prost_types;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// User-Agent header value for TypeScript SDK requests.
+const TS_SDK_USER_AGENT: &str = concat!("zerobus-sdk-ts/", env!("CARGO_PKG_VERSION"));
 
 /// Record serialization format.
 ///
@@ -48,7 +50,6 @@ pub enum RecordType {
 ///
 /// These options control stream behavior including recovery, timeouts, and inflight limits.
 #[napi(object)]
-#[derive(Debug, Clone)]
 pub struct StreamConfigurationOptions {
     /// Maximum number of unacknowledged requests that can be in flight.
     /// Default: 10,000
@@ -82,6 +83,15 @@ pub struct StreamConfigurationOptions {
     /// Use RecordType.Json for JSON encoding or RecordType.Proto for Protocol Buffers.
     /// Default: RecordType.Proto (Protocol Buffers)
     pub record_type: Option<i32>,
+
+    /// Maximum wait time during graceful stream close in milliseconds.
+    /// When the server signals stream closure, this controls how long to wait
+    /// for in-flight records to be acknowledged.
+    /// - None (undefined): Wait for full server-specified duration
+    /// - Some(0): Immediately trigger recovery without waiting
+    /// - Some(x): Wait up to min(x, server_duration) milliseconds
+    /// Default: None (wait for full server duration)
+    pub stream_paused_max_wait_time_ms: Option<u32>,
 }
 
 impl From<StreamConfigurationOptions> for RustStreamOptions {
@@ -103,6 +113,9 @@ impl From<StreamConfigurationOptions> for RustStreamOptions {
             flush_timeout_ms: opts.flush_timeout_ms.map(|v| v as u64).unwrap_or(default.flush_timeout_ms),
             server_lack_of_ack_timeout_ms: opts.server_lack_of_ack_timeout_ms.map(|v| v as u64).unwrap_or(default.server_lack_of_ack_timeout_ms),
             record_type,
+            callback_max_wait_time_ms: None, // Callbacks not supported in TS SDK
+            stream_paused_max_wait_time_ms: opts.stream_paused_max_wait_time_ms.map(|v| v as u64),
+            ack_callback: None, // Callbacks not supported in TS SDK
         }
     }
 }
@@ -255,6 +268,9 @@ pub struct ZerobusStream {
 impl ZerobusStream {
     /// Ingests a single record into the stream.
     ///
+    /// **@deprecated** Use `ingestRecordOffset()` instead, which returns the offset directly
+    /// after queuing. Then use `waitForOffset()` to wait for acknowledgment when needed.
+    ///
     /// This method accepts either:
     /// - A Protocol Buffer encoded record as a Buffer (Vec<u8>)
     /// - A JSON string
@@ -288,6 +304,7 @@ impl ZerobusStream {
     ///
     /// A Promise that resolves to the offset ID when the server acknowledges the record.
     #[napi(ts_return_type = "Promise<bigint>")]
+    #[allow(deprecated)]
     pub fn ingest_record(&self, env: Env, payload: Unknown) -> Result<JsObject> {
         let record_payload = convert_js_to_record_payload(&env, payload)?;
 
@@ -326,6 +343,9 @@ impl ZerobusStream {
 
     /// Ingests multiple records as a single atomic batch.
     ///
+    /// **@deprecated** Use `ingestRecordsOffset()` instead, which returns the offset directly
+    /// after queuing. Then use `waitForOffset()` to wait for acknowledgment when needed.
+    ///
     /// This method accepts an array of records (Protocol Buffer buffers or JSON strings)
     /// and ingests them as a batch. The batch receives a single acknowledgment from
     /// the server with all-or-nothing semantics.
@@ -354,6 +374,7 @@ impl ZerobusStream {
     /// }
     /// ```
     #[napi(ts_return_type = "Promise<bigint | null>")]
+    #[allow(deprecated)]
     pub fn ingest_records(&self, env: Env, records: Vec<Unknown>) -> Result<JsObject> {
         let record_payloads: Result<Vec<RustRecordPayload>> = records
             .into_iter()
@@ -401,6 +422,168 @@ impl ZerobusStream {
                 },
                 None => env.get_null().map(|v| v.into_unknown()),
             },
+        )
+    }
+
+    /// Ingests a single record and returns the offset ID directly after queuing.
+    ///
+    /// Unlike `ingestRecord()`, this method returns the offset ID immediately after
+    /// the record is queued, without waiting for server acknowledgment. Use
+    /// `waitForOffset()` to wait for acknowledgment when needed.
+    ///
+    /// This is the recommended API for high-throughput scenarios where you want to
+    /// decouple record ingestion from acknowledgment tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `payload` - The record data (Buffer, string, protobuf message, or plain object)
+    ///
+    /// # Returns
+    ///
+    /// The offset ID (bigint) assigned to this record.
+    ///
+    /// # Example
+    ///
+    /// ```typescript
+    /// const offset1 = await stream.ingestRecordOffset(record1);
+    /// const offset2 = await stream.ingestRecordOffset(record2);
+    /// // Wait for both to be acknowledged
+    /// await stream.waitForOffset(offset2);
+    /// ```
+    #[napi(ts_return_type = "Promise<bigint>")]
+    pub fn ingest_record_offset(&self, env: Env, payload: Unknown) -> Result<JsObject> {
+        let record_payload = convert_js_to_record_payload(&env, payload)?;
+
+        let stream = self.inner.clone();
+
+        env.execute_tokio_future(
+            async move {
+                let mut guard = stream.lock().await;
+                let stream_ref = guard
+                    .as_mut()
+                    .ok_or_else(|| napi::Error::from_reason("Stream has been closed"))?;
+
+                stream_ref
+                    .ingest_record_offset(record_payload)
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to ingest record: {}", e)))
+            },
+            |env, offset_id| {
+                let offset_str = offset_id.to_string();
+                let global: JsGlobal = env.get_global()?;
+                let bigint_ctor: JsFunction = global.get_named_property("BigInt")?;
+                let js_str = env.create_string(&offset_str)?;
+                bigint_ctor.call(None, &[js_str.into_unknown()])
+            },
+        )
+    }
+
+    /// Ingests multiple records as a batch and returns the offset ID directly after queuing.
+    ///
+    /// Unlike `ingestRecords()`, this method returns the offset ID immediately after
+    /// the batch is queued, without waiting for server acknowledgment. Use
+    /// `waitForOffset()` to wait for acknowledgment when needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `records` - Array of record data
+    ///
+    /// # Returns
+    ///
+    /// The offset ID (bigint) for the batch, or null for empty batches.
+    ///
+    /// # Example
+    ///
+    /// ```typescript
+    /// const offset = await stream.ingestRecordsOffset(batch);
+    /// if (offset !== null) {
+    ///   await stream.waitForOffset(offset);
+    /// }
+    /// ```
+    #[napi(ts_return_type = "Promise<bigint | null>")]
+    pub fn ingest_records_offset(&self, env: Env, records: Vec<Unknown>) -> Result<JsObject> {
+        let record_payloads: Result<Vec<RustRecordPayload>> = records
+            .into_iter()
+            .map(|payload| convert_js_to_record_payload(&env, payload))
+            .collect();
+
+        let record_payloads = record_payloads?;
+
+        let stream = self.inner.clone();
+
+        env.execute_tokio_future(
+            async move {
+                let mut guard = stream.lock().await;
+                let stream_ref = guard
+                    .as_mut()
+                    .ok_or_else(|| napi::Error::from_reason("Stream has been closed"))?;
+
+                stream_ref
+                    .ingest_records_offset(record_payloads)
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to ingest batch: {}", e)))
+            },
+            |env, result| match result {
+                Some(offset_id) => {
+                    let offset_str = offset_id.to_string();
+                    let global: JsGlobal = env.get_global()?;
+                    let bigint_ctor: JsFunction = global.get_named_property("BigInt")?;
+                    let js_str = env.create_string(&offset_str)?;
+                    let bigint = bigint_ctor.call(None, &[js_str.into_unknown()])?;
+                    Ok(bigint.into_unknown())
+                },
+                None => env.get_null().map(|v| v.into_unknown()),
+            },
+        )
+    }
+
+    /// Waits for a specific offset to be acknowledged by the server.
+    ///
+    /// Use this method with `ingestRecordOffset()` and `ingestRecordsOffset()` to
+    /// selectively wait for acknowledgments. This allows you to ingest many records
+    /// quickly and then wait only for specific offsets when needed.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset_id` - The offset ID to wait for (returned by ingestRecordOffset/ingestRecordsOffset)
+    ///
+    /// # Errors
+    ///
+    /// - Timeout if acknowledgment takes too long
+    /// - Server errors propagated immediately (no waiting for timeout)
+    ///
+    /// # Example
+    ///
+    /// ```typescript
+    /// const offsets = [];
+    /// for (const record of records) {
+    ///   offsets.push(await stream.ingestRecordOffset(record));
+    /// }
+    /// // Wait for the last offset (implies all previous are also acknowledged)
+    /// await stream.waitForOffset(offsets[offsets.length - 1]);
+    /// ```
+    #[napi(ts_args_type = "offsetId: bigint", ts_return_type = "Promise<void>")]
+    pub fn wait_for_offset(&self, env: Env, offset_id: JsUnknown) -> Result<JsObject> {
+        let global: JsGlobal = env.get_global()?;
+        let number_ctor: JsFunction = global.get_named_property("Number")?;
+        let num_result: JsUnknown = number_ctor.call(None, &[offset_id])?;
+        let offset: i64 = num_result.coerce_to_number()?.get_int64()?;
+
+        let stream = self.inner.clone();
+
+        env.execute_tokio_future(
+            async move {
+                let guard = stream.lock().await;
+                let stream_ref = guard
+                    .as_ref()
+                    .ok_or_else(|| napi::Error::from_reason("Stream has been closed"))?;
+
+                stream_ref
+                    .wait_for_offset(offset)
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to wait for offset: {}", e)))
+            },
+            |_env, _| Ok(()),
         )
     }
 
@@ -533,64 +716,53 @@ impl ZerobusStream {
     }
 }
 
-/// JavaScript headers provider callback wrapper.
-///
-/// Allows TypeScript code to provide custom authentication headers
-/// by implementing a getHeaders() function.
-#[napi(object)]
-pub struct JsHeadersProvider {
-    /// JavaScript function: () => Promise<Array<[string, string]>>
-    pub get_headers_callback: JsFunction,
+/// OAuth headers provider for TypeScript SDK.
+/// Uses the Rust SDK's token factory but with the TS user agent.
+/// No memory leaks - all header keys are static string literals.
+struct TsOAuthHeadersProvider {
+    client_id: String,
+    client_secret: String,
+    table_name: String,
+    workspace_id: String,
+    unity_catalog_url: String,
 }
 
-/// Internal adapter that wraps static headers as a HeadersProvider
-/// This is used for custom authentication in the TypeScript SDK
-struct StaticHeadersProvider {
-    headers: HashMap<&'static str, String>,
-}
-
-impl StaticHeadersProvider {
-    fn new(headers: Vec<(String, String)>) -> RustZerobusResult<Self> {
-        // Convert Vec<(String, String)> to HashMap<&'static str, String>
-        // We need to leak strings to get 'static lifetime for keys
-        let mut map = HashMap::new();
-        for (k, v) in headers {
-            let static_key: &'static str = Box::leak(k.into_boxed_str());
-            map.insert(static_key, v);
+impl TsOAuthHeadersProvider {
+    fn new(
+        client_id: String,
+        client_secret: String,
+        table_name: String,
+        workspace_id: String,
+        unity_catalog_url: String,
+    ) -> Self {
+        Self {
+            client_id,
+            client_secret,
+            table_name,
+            workspace_id,
+            unity_catalog_url,
         }
-
-        if !map.contains_key("authorization") {
-            return Err(RustZerobusError::InvalidArgument(
-                "HeadersProvider must include 'authorization' header with Bearer token".to_string()
-            ));
-        }
-        if !map.contains_key("x-databricks-zerobus-table-name") {
-            return Err(RustZerobusError::InvalidArgument(
-                "HeadersProvider must include 'x-databricks-zerobus-table-name' header".to_string()
-            ));
-        }
-
-        Ok(Self { headers: map })
     }
 }
 
 #[async_trait]
-impl RustHeadersProvider for StaticHeadersProvider {
+impl RustHeadersProvider for TsOAuthHeadersProvider {
     async fn get_headers(&self) -> RustZerobusResult<HashMap<&'static str, String>> {
-        Ok(self.headers.clone())
+        let token = DefaultTokenFactory::get_token(
+            &self.unity_catalog_url,
+            &self.table_name,
+            &self.client_id,
+            &self.client_secret,
+            &self.workspace_id,
+        )
+        .await?;
+
+        let mut headers = HashMap::new();
+        headers.insert("authorization", format!("Bearer {}", token));
+        headers.insert("x-databricks-zerobus-table-name", self.table_name.clone());
+        headers.insert("user-agent", TS_SDK_USER_AGENT.to_string());
+        Ok(headers)
     }
-}
-
-/// Helper to create a threadsafe function from JavaScript callback
-fn create_headers_tsfn(js_func: JsFunction) -> Result<ThreadsafeFunction<(), ErrorStrategy::Fatal>> {
-    js_func.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))
-}
-
-/// Helper to call headers callback and get result
-async fn call_headers_tsfn(tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal>) -> Result<Vec<(String, String)>> {
-    tsfn.call_async::<Vec<(String, String)>>(())
-        .await
-        .map_err(|e| Error::from_reason(format!("Failed to call headers callback: {}", e)))
 }
 
 /// The main SDK for interacting with the Databricks Zerobus service.
@@ -614,6 +786,10 @@ async fn call_headers_tsfn(tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal>) -
 #[napi]
 pub struct ZerobusSdk {
     inner: Arc<RustZerobusSdk>,
+    /// Stored for creating TsOAuthHeadersProvider
+    workspace_id: String,
+    /// Stored for creating TsOAuthHeadersProvider
+    unity_catalog_url: String,
 }
 
 #[napi]
@@ -633,27 +809,36 @@ impl ZerobusSdk {
     /// - Failed to extract workspace ID from the endpoint
     #[napi(constructor)]
     pub fn new(zerobus_endpoint: String, unity_catalog_url: String) -> Result<Self> {
-        let inner = RustZerobusSdk::new(zerobus_endpoint, unity_catalog_url)
+        let workspace_id = zerobus_endpoint
+            .strip_prefix("https://")
+            .or_else(|| zerobus_endpoint.strip_prefix("http://"))
+            .and_then(|s| s.split('.').next())
+            .map(|s| s.to_string())
+            .ok_or_else(|| {
+                Error::from_reason("Failed to extract workspace_id from zerobus_endpoint".to_string())
+            })?;
+
+        let inner = RustZerobusSdk::new(zerobus_endpoint, unity_catalog_url.clone())
             .map_err(|e| Error::from_reason(format!("Failed to create SDK: {}", e)))?;
 
-        Ok(ZerobusSdk { inner: Arc::new(inner) })
+        Ok(ZerobusSdk {
+            inner: Arc::new(inner),
+            workspace_id,
+            unity_catalog_url,
+        })
     }
 
-    /// Creates a new ingestion stream to a Delta table.
+    /// Creates a new ingestion stream to a Delta table using OAuth 2.0 authentication.
     ///
     /// This method establishes a bidirectional gRPC connection to the Zerobus service
-    /// and prepares it for data ingestion. By default, it uses OAuth 2.0 Client Credentials
-    /// authentication. For custom authentication (e.g., Personal Access Tokens), provide
-    /// a custom headers_provider.
+    /// and prepares it for data ingestion using OAuth 2.0 Client Credentials flow.
     ///
     /// # Arguments
     ///
     /// * `table_properties` - Properties of the target table including name and optional schema
-    /// * `client_id` - OAuth 2.0 client ID (ignored if headers_provider is provided)
-    /// * `client_secret` - OAuth 2.0 client secret (ignored if headers_provider is provided)
-    /// * `options` - Optional stream configuration (uses defaults if not provided)
-    /// * `headers_provider` - Optional custom headers provider for authentication.
-    ///   If not provided, uses OAuth with client_id and client_secret.
+    /// * `client_id` - OAuth 2.0 client ID
+    /// * `client_secret` - OAuth 2.0 client secret
+    /// * `options` - Optional stream configuration (timeouts, recovery settings, etc.)
     ///
     /// # Returns
     ///
@@ -666,31 +851,13 @@ impl ZerobusSdk {
     /// - Network connectivity issues
     /// - Schema validation errors
     ///
-    /// # Examples
+    /// # Example
     ///
-    /// OAuth authentication (default):
     /// ```typescript
     /// const stream = await sdk.createStream(
     ///   { tableName: "catalog.schema.table" },
     ///   "client-id",
     ///   "client-secret"
-    /// );
-    /// ```
-    ///
-    /// Custom authentication with headers provider:
-    /// ```typescript
-    /// const headersProvider = {
-    ///   getHeadersCallback: async () => [
-    ///     ["authorization", `Bearer ${myToken}`],
-    ///     ["x-databricks-zerobus-table-name", tableName]
-    ///   ]
-    /// };
-    /// const stream = await sdk.createStream(
-    ///   { tableName: "catalog.schema.table" },
-    ///   "", // ignored
-    ///   "", // ignored
-    ///   undefined,
-    ///   headersProvider
     /// );
     /// ```
     #[napi(ts_return_type = "Promise<ZerobusStream>")]
@@ -701,49 +868,34 @@ impl ZerobusSdk {
         client_id: String,
         client_secret: String,
         options: Option<StreamConfigurationOptions>,
-        headers_provider: Option<JsHeadersProvider>,
     ) -> Result<JsObject> {
         let rust_table_props = table_properties.to_rust()?;
-        let rust_options = options.map(|o| o.into());
-
-        let headers_tsfn = match headers_provider {
-            Some(JsHeadersProvider { get_headers_callback }) => {
-                Some(create_headers_tsfn(get_headers_callback)?)
-            }
-            None => None,
-        };
+        let rust_options: RustStreamOptions = options.map(|o| o.into()).unwrap_or_default();
 
         let sdk = self.inner.clone();
+        let workspace_id = self.workspace_id.clone();
+        let unity_catalog_url = self.unity_catalog_url.clone();
+        let table_name = table_properties.table_name.clone();
 
         env.execute_tokio_future(
             async move {
-                let headers_provider_arc = if let Some(tsfn) = headers_tsfn {
-                    let headers = call_headers_tsfn(tsfn).await
-                        .map_err(|e| napi::Error::from_reason(format!("Headers callback failed: {}", e)))?;
+                // Use OAuth with TS user agent
+                let headers_provider = Arc::new(TsOAuthHeadersProvider::new(
+                    client_id,
+                    client_secret,
+                    table_name,
+                    workspace_id,
+                    unity_catalog_url,
+                ));
 
-                    let static_provider = StaticHeadersProvider::new(headers)
-                        .map_err(|e| napi::Error::from_reason(format!("Invalid headers: {}", e)))?;
-
-                    Some(Arc::new(static_provider) as Arc<dyn RustHeadersProvider>)
-                } else {
-                    None
-                };
-
-                let stream = if let Some(provider) = headers_provider_arc {
-                    sdk
-                        .create_stream_with_headers_provider(
-                            rust_table_props,
-                            provider,
-                            rust_options,
-                        )
-                        .await
-                        .map_err(|e| napi::Error::from_reason(format!("Failed to create stream: {}", e)))?
-                } else {
-                    sdk
-                        .create_stream(rust_table_props, client_id, client_secret, rust_options)
-                        .await
-                        .map_err(|e| napi::Error::from_reason(format!("Failed to create stream: {}", e)))?
-                };
+                let stream = sdk
+                    .create_stream_with_headers_provider(
+                        rust_table_props,
+                        headers_provider,
+                        Some(rust_options),
+                    )
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to create stream: {}", e)))?;
 
                 Ok(ZerobusStream {
                     inner: Arc::new(Mutex::new(Some(stream))),
@@ -812,4 +964,580 @@ fn base64_decode(input: &str) -> std::result::Result<Vec<u8>, String> {
     STANDARD
         .decode(input)
         .map_err(|e| format!("Base64 decode error: {}", e))
+}
+
+// =============================================================================
+// Arrow Flight Support (Experimental/Unsupported)
+// Enabled with feature flag: cargo build --features arrow-flight
+// =============================================================================
+
+#[cfg(feature = "arrow-flight")]
+use databricks_zerobus_ingest_sdk::{
+    ArrowStreamConfigurationOptions as RustArrowStreamOptions,
+    ArrowTableProperties as RustArrowTableProperties,
+    ZerobusArrowStream as RustZerobusArrowStream,
+    ArrowSchema as RustArrowSchema,
+    RecordBatch as RustRecordBatch,
+    Field as RustField,
+    DataType as RustDataType,
+};
+#[cfg(feature = "arrow-flight")]
+use arrow_ipc::reader::StreamReader;
+#[cfg(feature = "arrow-flight")]
+use arrow_ipc::writer::StreamWriter;
+#[cfg(feature = "arrow-flight")]
+use std::io::Cursor;
+
+/// IPC compression type for Arrow Flight streams.
+///
+/// **Experimental/Unsupported**: Arrow Flight support is experimental and not yet
+/// supported for production use. The API may change in future releases.
+#[cfg(feature = "arrow-flight")]
+#[napi]
+pub enum IpcCompressionType {
+    /// LZ4 frame compression - fast compression with moderate ratio
+    Lz4Frame = 0,
+    /// Zstandard compression - better compression ratio, slightly slower
+    Zstd = 1,
+}
+
+/// Configuration options for Arrow Flight streams.
+///
+/// **Experimental/Unsupported**: Arrow Flight support is experimental and not yet
+/// supported for production use. The API may change in future releases.
+#[cfg(feature = "arrow-flight")]
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct ArrowStreamConfigurationOptions {
+    /// Maximum number of batches that can be in-flight (sent but not acknowledged).
+    /// Default: 1,000
+    pub max_inflight_batches: Option<u32>,
+
+    /// Whether to enable automatic stream recovery on failure.
+    /// Default: true
+    pub recovery: Option<bool>,
+
+    /// Timeout for recovery operations in milliseconds.
+    /// Default: 15,000 (15 seconds)
+    pub recovery_timeout_ms: Option<u32>,
+
+    /// Delay between recovery retry attempts in milliseconds.
+    /// Default: 2,000 (2 seconds)
+    pub recovery_backoff_ms: Option<u32>,
+
+    /// Maximum number of recovery attempts before giving up.
+    /// Default: 4
+    pub recovery_retries: Option<u32>,
+
+    /// Timeout waiting for server acknowledgments in milliseconds.
+    /// Default: 60,000 (1 minute)
+    pub server_lack_of_ack_timeout_ms: Option<u32>,
+
+    /// Timeout for flush operations in milliseconds.
+    /// Default: 300,000 (5 minutes)
+    pub flush_timeout_ms: Option<u32>,
+
+    /// Timeout for connection establishment in milliseconds.
+    /// Default: 30,000 (30 seconds)
+    pub connection_timeout_ms: Option<u32>,
+
+    /// Optional IPC compression type (0 = LZ4Frame, 1 = Zstd, undefined = no compression)
+    pub ipc_compression: Option<i32>,
+}
+
+#[cfg(feature = "arrow-flight")]
+impl From<ArrowStreamConfigurationOptions> for RustArrowStreamOptions {
+    fn from(opts: ArrowStreamConfigurationOptions) -> Self {
+        let default = RustArrowStreamOptions::default();
+
+        let ipc_compression = match opts.ipc_compression {
+            Some(0) => Some(arrow_ipc::CompressionType::LZ4_FRAME),
+            Some(1) => Some(arrow_ipc::CompressionType::ZSTD),
+            _ => None,
+        };
+
+        RustArrowStreamOptions {
+            max_inflight_batches: opts.max_inflight_batches.unwrap_or(default.max_inflight_batches as u32) as usize,
+            recovery: opts.recovery.unwrap_or(default.recovery),
+            recovery_timeout_ms: opts.recovery_timeout_ms.map(|v| v as u64).unwrap_or(default.recovery_timeout_ms),
+            recovery_backoff_ms: opts.recovery_backoff_ms.map(|v| v as u64).unwrap_or(default.recovery_backoff_ms),
+            recovery_retries: opts.recovery_retries.unwrap_or(default.recovery_retries),
+            server_lack_of_ack_timeout_ms: opts.server_lack_of_ack_timeout_ms.map(|v| v as u64).unwrap_or(default.server_lack_of_ack_timeout_ms),
+            flush_timeout_ms: opts.flush_timeout_ms.map(|v| v as u64).unwrap_or(default.flush_timeout_ms),
+            connection_timeout_ms: opts.connection_timeout_ms.map(|v| v as u64).unwrap_or(default.connection_timeout_ms),
+            ipc_compression,
+        }
+    }
+}
+
+/// Arrow data type enum for schema definition.
+///
+/// **Experimental/Unsupported**: Arrow Flight support is experimental.
+#[cfg(feature = "arrow-flight")]
+#[napi]
+pub enum ArrowDataType {
+    /// Boolean type
+    Boolean = 0,
+    /// Signed 8-bit integer
+    Int8 = 1,
+    /// Signed 16-bit integer
+    Int16 = 2,
+    /// Signed 32-bit integer
+    Int32 = 3,
+    /// Signed 64-bit integer
+    Int64 = 4,
+    /// Unsigned 8-bit integer
+    UInt8 = 5,
+    /// Unsigned 16-bit integer
+    UInt16 = 6,
+    /// Unsigned 32-bit integer
+    UInt32 = 7,
+    /// Unsigned 64-bit integer
+    UInt64 = 8,
+    /// 32-bit floating point
+    Float32 = 9,
+    /// 64-bit floating point
+    Float64 = 10,
+    /// UTF-8 encoded string
+    Utf8 = 11,
+    /// Large UTF-8 encoded string (64-bit offsets)
+    LargeUtf8 = 12,
+    /// Binary data
+    Binary = 13,
+    /// Large binary data (64-bit offsets)
+    LargeBinary = 14,
+    /// Date (32-bit days since epoch)
+    Date32 = 15,
+    /// Date (64-bit milliseconds since epoch)
+    Date64 = 16,
+    /// Timestamp with microsecond precision (UTC)
+    TimestampMicros = 17,
+    /// Timestamp with nanosecond precision (UTC)
+    TimestampNanos = 18,
+}
+
+#[cfg(feature = "arrow-flight")]
+fn convert_arrow_data_type(dt: i32) -> RustDataType {
+    match dt {
+        0 => RustDataType::Boolean,
+        1 => RustDataType::Int8,
+        2 => RustDataType::Int16,
+        3 => RustDataType::Int32,
+        4 => RustDataType::Int64,
+        5 => RustDataType::UInt8,
+        6 => RustDataType::UInt16,
+        7 => RustDataType::UInt32,
+        8 => RustDataType::UInt64,
+        9 => RustDataType::Float32,
+        10 => RustDataType::Float64,
+        11 => RustDataType::Utf8,
+        12 => RustDataType::LargeUtf8,
+        13 => RustDataType::Binary,
+        14 => RustDataType::LargeBinary,
+        15 => RustDataType::Date32,
+        16 => RustDataType::Date64,
+        17 => RustDataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into())),
+        18 => RustDataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, Some("UTC".into())),
+        _ => RustDataType::Utf8,
+    }
+}
+
+/// Arrow field definition for schema.
+///
+/// **Experimental/Unsupported**: Arrow Flight support is experimental.
+#[cfg(feature = "arrow-flight")]
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct ArrowField {
+    /// Field name
+    pub name: String,
+    /// Field data type (ArrowDataType enum value)
+    pub data_type: i32,
+    /// Whether the field is nullable
+    pub nullable: Option<bool>,
+}
+
+/// Properties of the target Delta table for Arrow Flight ingestion.
+///
+/// Unlike `TableProperties` which uses Protocol Buffers, Arrow Flight streams
+/// require an Arrow schema definition.
+///
+/// **Experimental/Unsupported**: Arrow Flight support is experimental and not yet
+/// supported for production use. The API may change in future releases.
+#[cfg(feature = "arrow-flight")]
+#[napi(object)]
+#[derive(Debug, Clone)]
+pub struct ArrowTableProperties {
+    /// Full table name in Unity Catalog (e.g., "catalog.schema.table")
+    pub table_name: String,
+    /// Arrow schema fields
+    pub schema_fields: Vec<ArrowField>,
+}
+
+#[cfg(feature = "arrow-flight")]
+impl ArrowTableProperties {
+    fn to_rust(&self) -> Result<RustArrowTableProperties> {
+        let fields: Vec<RustField> = self.schema_fields.iter().map(|f| {
+            RustField::new(
+                &f.name,
+                convert_arrow_data_type(f.data_type),
+                f.nullable.unwrap_or(true),
+            )
+        }).collect();
+
+        let schema = Arc::new(RustArrowSchema::new(fields));
+
+        Ok(RustArrowTableProperties {
+            table_name: self.table_name.clone(),
+            schema,
+        })
+    }
+}
+
+/// An Arrow Flight stream for ingesting Arrow RecordBatches into a Delta table.
+///
+/// This stream provides a high-performance interface for streaming Arrow data
+/// to Databricks Delta tables using the Arrow Flight protocol.
+///
+/// **Experimental/Unsupported**: Arrow Flight support is experimental and not yet
+/// supported for production use. The API may change in future releases.
+///
+/// # Lifecycle
+///
+/// 1. Create a stream via `sdk.createArrowStream()`
+/// 2. Ingest Arrow IPC buffers with `ingestBatch()`
+/// 3. Use `waitForOffset()` to wait for acknowledgments
+/// 4. Call `flush()` to ensure all batches are persisted
+/// 5. Close the stream with `close()`
+///
+/// # Example
+///
+/// ```typescript
+/// import { tableToIPC } from 'apache-arrow';
+///
+/// const arrowStream = await sdk.createArrowStream(
+///   arrowTableProps,
+///   clientId,
+///   clientSecret,
+///   options
+/// );
+///
+/// const ipcBuffer = tableToIPC(arrowTable, 'stream');
+/// const offset = await arrowStream.ingestBatch(Buffer.from(ipcBuffer));
+/// await arrowStream.waitForOffset(offset);
+/// await arrowStream.close();
+/// ```
+#[cfg(feature = "arrow-flight")]
+#[napi]
+pub struct ZerobusArrowStream {
+    inner: Arc<Mutex<Option<RustZerobusArrowStream>>>,
+    schema: Arc<RustArrowSchema>,
+}
+
+/// Helper to parse Arrow IPC buffer to RecordBatch
+#[cfg(feature = "arrow-flight")]
+fn parse_arrow_ipc_to_batch(ipc_buffer: &[u8], _expected_schema: &RustArrowSchema) -> Result<RustRecordBatch> {
+    let cursor = Cursor::new(ipc_buffer);
+    let reader = StreamReader::try_new(cursor, None)
+        .map_err(|e| Error::from_reason(format!("Failed to parse Arrow IPC: {}", e)))?;
+
+    // Collect all batches (typically just one)
+    let batches: Vec<RustRecordBatch> = reader
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if batches.is_empty() {
+        return Err(Error::from_reason("Arrow IPC buffer contains no record batches"));
+    }
+
+    // Return the first batch (or could concatenate if multiple)
+    Ok(batches.into_iter().next().unwrap())
+}
+
+/// Helper to serialize RecordBatch to Arrow IPC buffer
+#[cfg(feature = "arrow-flight")]
+fn serialize_batch_to_ipc(batch: &RustRecordBatch) -> Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut buffer, batch.schema().as_ref())
+            .map_err(|e| Error::from_reason(format!("Failed to create Arrow IPC writer: {}", e)))?;
+        writer.write(batch)
+            .map_err(|e| Error::from_reason(format!("Failed to write batch to IPC: {}", e)))?;
+        writer.finish()
+            .map_err(|e| Error::from_reason(format!("Failed to finish IPC stream: {}", e)))?;
+    }
+    Ok(buffer)
+}
+
+#[cfg(feature = "arrow-flight")]
+#[napi]
+impl ZerobusArrowStream {
+    /// Ingests a single Arrow IPC buffer into the stream.
+    ///
+    /// The buffer should be an Arrow IPC stream format containing one or more RecordBatches.
+    /// You can create this using `tableToIPC(table, 'stream')` from the apache-arrow package.
+    ///
+    /// # Arguments
+    ///
+    /// * `ipc_buffer` - Arrow IPC stream format buffer
+    ///
+    /// # Returns
+    ///
+    /// The offset ID (bigint) assigned to this batch.
+    ///
+    /// # Example
+    ///
+    /// ```typescript
+    /// const table = tableFromArrays({
+    ///   device_name: ['sensor-1'],
+    ///   temp: [25],
+    ///   humidity: [60]
+    /// });
+    /// const ipcBuffer = tableToIPC(table, 'stream');
+    /// const offset = await stream.ingestBatch(Buffer.from(ipcBuffer));
+    /// await stream.waitForOffset(offset);
+    /// ```
+    #[napi(ts_return_type = "Promise<bigint>")]
+    pub fn ingest_batch(&self, env: Env, ipc_buffer: Buffer) -> Result<JsObject> {
+        let schema = self.schema.clone();
+        let stream = self.inner.clone();
+        let buffer_vec = ipc_buffer.to_vec();
+
+        env.execute_tokio_future(
+            async move {
+                let batch = parse_arrow_ipc_to_batch(&buffer_vec, &schema)?;
+
+                let mut guard = stream.lock().await;
+                let stream_ref = guard
+                    .as_mut()
+                    .ok_or_else(|| napi::Error::from_reason("Arrow stream has been closed"))?;
+
+                stream_ref
+                    .ingest_batch(batch)
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to ingest batch: {}", e)))
+            },
+            |env, offset_id| {
+                let offset_str = offset_id.to_string();
+                let global: JsGlobal = env.get_global()?;
+                let bigint_ctor: JsFunction = global.get_named_property("BigInt")?;
+                let js_str = env.create_string(&offset_str)?;
+                bigint_ctor.call(None, &[js_str.into_unknown()])
+            },
+        )
+    }
+
+    /// Waits for a specific offset to be acknowledged by the server.
+    ///
+    /// Use this method with `ingestBatch()` to selectively wait for acknowledgments.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset_id` - The offset ID to wait for (returned by ingestBatch)
+    #[napi(ts_args_type = "offsetId: bigint", ts_return_type = "Promise<void>")]
+    pub fn wait_for_offset(&self, env: Env, offset_id: JsUnknown) -> Result<JsObject> {
+        let global: JsGlobal = env.get_global()?;
+        let number_ctor: JsFunction = global.get_named_property("Number")?;
+        let num_result: JsUnknown = number_ctor.call(None, &[offset_id])?;
+        let offset: i64 = num_result.coerce_to_number()?.get_int64()?;
+
+        let stream = self.inner.clone();
+
+        env.execute_tokio_future(
+            async move {
+                let guard = stream.lock().await;
+                let stream_ref = guard
+                    .as_ref()
+                    .ok_or_else(|| napi::Error::from_reason("Arrow stream has been closed"))?;
+
+                stream_ref
+                    .wait_for_offset(offset)
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to wait for offset: {}", e)))
+            },
+            |_env, _| Ok(()),
+        )
+    }
+
+    /// Flushes all pending batches and waits for acknowledgments.
+    #[napi]
+    pub async fn flush(&self) -> Result<()> {
+        let guard = self.inner.lock().await;
+        let stream = guard
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Arrow stream has been closed"))?;
+
+        stream
+            .flush()
+            .await
+            .map_err(|e| Error::from_reason(format!("Failed to flush arrow stream: {}", e)))
+    }
+
+    /// Closes the stream gracefully.
+    #[napi]
+    pub async fn close(&self) -> Result<()> {
+        let mut guard = self.inner.lock().await;
+        if let Some(mut stream) = guard.take() {
+            stream
+                .close()
+                .await
+                .map_err(|e| Error::from_reason(format!("Failed to close arrow stream: {}", e)))?;
+        }
+        Ok(())
+    }
+
+    /// Returns whether the stream has been closed.
+    #[napi(getter)]
+    pub fn is_closed(&self) -> bool {
+        // Check synchronously using try_lock
+        match self.inner.try_lock() {
+            Ok(guard) => guard.is_none(),
+            Err(_) => false, // If we can't acquire lock, assume not closed
+        }
+    }
+
+    /// Returns the table name for this stream.
+    #[napi(getter)]
+    pub fn table_name(&self) -> Result<String> {
+        let guard = self.inner.try_lock()
+            .map_err(|_| Error::from_reason("Stream is busy"))?;
+        let stream = guard
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Stream has been closed"))?;
+        Ok(stream.table_name().to_string())
+    }
+
+    /// Gets unacknowledged batches as Arrow IPC buffers.
+    ///
+    /// This method should only be called after a stream failure to retrieve batches
+    /// that were sent but not acknowledged. These can be re-ingested into a new stream.
+    ///
+    /// # Returns
+    ///
+    /// An array of Buffers containing the unacknowledged batches in Arrow IPC format.
+    #[napi]
+    pub async fn get_unacked_batches(&self) -> Result<Vec<Buffer>> {
+        let guard = self.inner.lock().await;
+        let stream = guard
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Stream has been closed"))?;
+
+        let batches = stream
+            .get_unacked_batches()
+            .await
+            .map_err(|e| Error::from_reason(format!("Failed to get unacked batches: {}", e)))?;
+
+        // Convert each RecordBatch back to IPC format
+        batches
+            .iter()
+            .map(|batch| {
+                let ipc_bytes = serialize_batch_to_ipc(batch)?;
+                Ok(ipc_bytes.into())
+            })
+            .collect()
+    }
+}
+
+// Add Arrow stream methods to ZerobusSdk
+#[cfg(feature = "arrow-flight")]
+#[napi]
+impl ZerobusSdk {
+    /// Creates a new Arrow Flight stream to a Delta table.
+    ///
+    /// **Experimental/Unsupported**: Arrow Flight support is experimental and not yet
+    /// supported for production use. The API may change in future releases.
+    ///
+    /// This method establishes an Arrow Flight connection to the Zerobus service
+    /// for high-performance columnar data ingestion.
+    ///
+    /// # Arguments
+    ///
+    /// * `table_properties` - Properties of the target table including name and Arrow schema
+    /// * `client_id` - OAuth 2.0 client ID
+    /// * `client_secret` - OAuth 2.0 client secret
+    /// * `options` - Optional stream configuration
+    ///
+    /// # Returns
+    ///
+    /// A Promise that resolves to a ZerobusArrowStream ready for data ingestion.
+    ///
+    /// # Example
+    ///
+    /// ```typescript
+    /// const tableProps = {
+    ///   tableName: 'catalog.schema.table',
+    ///   schemaFields: [
+    ///     { name: 'device_name', dataType: ArrowDataType.Utf8 },
+    ///     { name: 'temp', dataType: ArrowDataType.Int32 },
+    ///     { name: 'humidity', dataType: ArrowDataType.Int64 }
+    ///   ]
+    /// };
+    ///
+    /// const arrowStream = await sdk.createArrowStream(
+    ///   tableProps,
+    ///   clientId,
+    ///   clientSecret,
+    ///   { maxInflightBatches: 100 }
+    /// );
+    /// ```
+    #[napi(ts_return_type = "Promise<ZerobusArrowStream>")]
+    pub fn create_arrow_stream(
+        &self,
+        env: Env,
+        table_properties: ArrowTableProperties,
+        client_id: String,
+        client_secret: String,
+        options: Option<ArrowStreamConfigurationOptions>,
+    ) -> Result<JsObject> {
+        let rust_table_props = table_properties.to_rust()?;
+        let schema = rust_table_props.schema.clone();
+        let rust_options: Option<RustArrowStreamOptions> = options.map(|o| o.into());
+
+        let sdk = self.inner.clone();
+
+        env.execute_tokio_future(
+            async move {
+                let stream = sdk
+                    .create_arrow_stream(rust_table_props, client_id, client_secret, rust_options)
+                    .await
+                    .map_err(|e| napi::Error::from_reason(format!("Failed to create arrow stream: {}", e)))?;
+
+                Ok(ZerobusArrowStream {
+                    inner: Arc::new(Mutex::new(Some(stream))),
+                    schema,
+                })
+            },
+            |_env, stream| Ok(stream),
+        )
+    }
+
+    /// Recreates an Arrow stream with the same configuration and re-ingests unacknowledged batches.
+    ///
+    /// **Experimental/Unsupported**: Arrow Flight support is experimental.
+    ///
+    /// # Arguments
+    ///
+    /// * `stream` - The failed or closed Arrow stream to recreate
+    ///
+    /// # Returns
+    ///
+    /// A Promise that resolves to a new ZerobusArrowStream with all unacknowledged batches re-ingested.
+    #[napi]
+    pub async fn recreate_arrow_stream(&self, stream: &ZerobusArrowStream) -> Result<ZerobusArrowStream> {
+        let inner_guard = stream.inner.lock().await;
+        let rust_stream = inner_guard
+            .as_ref()
+            .ok_or_else(|| Error::from_reason("Arrow stream has been closed"))?;
+
+        let new_rust_stream = self
+            .inner
+            .recreate_arrow_stream(rust_stream)
+            .await
+            .map_err(|e| Error::from_reason(format!("Failed to recreate arrow stream: {}", e)))?;
+
+        Ok(ZerobusArrowStream {
+            inner: Arc::new(Mutex::new(Some(new_rust_stream))),
+            schema: stream.schema.clone(),
+        })
+    }
 }
