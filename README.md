@@ -610,7 +610,7 @@ npm run build:proto
 protoc --descriptor_set_out=schemas/air_quality_descriptor.pb --include_imports schemas/air_quality.proto
 
 # Run example
-npx tsx examples/proto.ts
+npm run example:proto:single
 ```
 
 #### Why Two Steps (TypeScript + Descriptor)?
@@ -641,15 +641,17 @@ export DATABRICKS_CLIENT_ID="your-client-id"
 export DATABRICKS_CLIENT_SECRET="your-client-secret"
 export ZEROBUS_TABLE_NAME="main.default.air_quality"
 
-# Run JSON example
-npx tsx examples/json.ts
+# Run JSON examples
+npm run example:json:single
+npm run example:json:batch
 
 # For Protocol Buffers, generate TypeScript code and descriptor
 npm run build:proto
 protoc --descriptor_set_out=schemas/air_quality_descriptor.pb --include_imports schemas/air_quality.proto
 
-# Run Protocol Buffers example
-npx tsx examples/proto.ts
+# Run Protocol Buffers examples
+npm run example:proto:single
+npm run example:proto:batch
 ```
 
 ### Batch Ingestion
@@ -703,7 +705,7 @@ const offsetId = await stream.ingestRecords(records);
 - Use `recreateStream()` for recovery - it automatically handles unacknowledged batches
 
 **Examples:**
-Both `json.ts` and `proto.ts` examples demonstrate batch ingestion.
+See `examples/json/batch.ts` and `examples/proto/batch.ts` for batch ingestion examples.
 
 ## Authentication
 
@@ -729,32 +731,7 @@ The SDK automatically fetches access tokens and includes these headers:
 
 ### Custom Authentication
 
-Beyond OAuth, you can use custom headers for Personal Access Tokens (PAT) or other auth methods:
-
-```typescript
-import { ZerobusSdk } from '@databricks/zerobus-ingest-sdk';
-import { HeadersProvider } from '@databricks/zerobus-ingest-sdk/src/headers_provider';
-
-class CustomHeadersProvider implements HeadersProvider {
-  async getHeaders(): Promise<Array<[string, string]>> {
-    return [
-      ["authorization", `Bearer ${myToken}`],
-      ["x-databricks-zerobus-table-name", tableName]
-    ];
-  }
-}
-
-const headersProvider = new CustomHeadersProvider();
-const stream = await sdk.createStream(
-  tableProperties,
-  '', // client_id (ignored when headers_provider is provided)
-  '', // client_secret (ignored when headers_provider is provided)
-  options,
-  { getHeadersCallback: headersProvider.getHeaders.bind(headersProvider) }
-);
-```
-
-**Note:** Custom authentication is integrated into the main `createStream()` method. See the API Reference for details.
+The SDK currently supports OAuth 2.0 Client Credentials authentication. Support for custom authentication methods (such as Personal Access Tokens) may be added in a future release.
 
 ## Configuration
 
@@ -770,6 +747,7 @@ const stream = await sdk.createStream(
 | `recoveryRetries` | 4 | Maximum number of recovery attempts |
 | `flushTimeoutMs` | 300,000 | Timeout for flush operations (ms) |
 | `serverLackOfAckTimeoutMs` | 60,000 | Server acknowledgment timeout (ms) |
+| `streamPausedMaxWaitTimeMs` | undefined | Max wait time during graceful stream close (ms) |
 
 ### Example Configuration
 
@@ -953,8 +931,41 @@ Represents an active ingestion stream.
 **Methods:**
 
 ```typescript
+async ingestRecordOffset(payload: Buffer | string | object): Promise<bigint>
+```
+
+**(Recommended)** Ingests a single record and returns the offset ID immediately after queuing. Use `waitForOffset()` to wait for acknowledgment when needed.
+
+```typescript
+// High-throughput pattern: send many, wait once
+const offset1 = await stream.ingestRecordOffset(record1);
+const offset2 = await stream.ingestRecordOffset(record2);
+await stream.waitForOffset(offset2);  // Waits for all records up to offset2
+```
+
+---
+
+```typescript
+async ingestRecordsOffset(payloads: Array<Buffer | string | object>): Promise<bigint | null>
+```
+
+**(Recommended)** Ingests multiple records as a batch and returns the offset ID immediately after queuing. Returns `null` for empty batches.
+
+---
+
+```typescript
+async waitForOffset(offsetId: bigint): Promise<void>
+```
+
+Waits for the server to acknowledge all records up to and including the specified offset ID.
+
+---
+
+```typescript
 async ingestRecord(payload: Buffer | string | object): Promise<bigint>
 ```
+
+**@deprecated** Use `ingestRecordOffset()` instead.
 
 Ingests a single record. This method **blocks** until the record is sent to the SDK's internal landing zone, then returns a Promise for the server acknowledgment. This allows you to send many records without waiting for individual acknowledgments.
 
@@ -993,6 +1004,8 @@ await stream.ingestRecord(buffer);
 ```typescript
 async ingestRecords(payloads: Array<Buffer | string | object>): Promise<bigint | null>
 ```
+
+**@deprecated** Use `ingestRecordsOffset()` instead.
 
 Ingests multiple records as a batch. All records in a batch are acknowledged together atomically. This method **blocks** until all records are sent to the SDK's internal landing zone, then returns a Promise for the server acknowledgment.
 
@@ -1135,14 +1148,15 @@ Configuration options for stream behavior.
 
 ```typescript
 interface StreamConfigurationOptions {
-    recordType?: RecordType;           // RecordType.Json or RecordType.Proto. Default: RecordType.Proto
-    maxInflightRequests?: number;      // Default: 10,000
-    recovery?: boolean;                // Default: true
-    recoveryTimeoutMs?: number;        // Default: 15,000
-    recoveryBackoffMs?: number;        // Default: 2,000
-    recoveryRetries?: number;          // Default: 4
-    flushTimeoutMs?: number;           // Default: 300,000
-    serverLackOfAckTimeoutMs?: number; // Default: 60,000
+    recordType?: RecordType;              // RecordType.Json or RecordType.Proto. Default: RecordType.Proto
+    maxInflightRequests?: number;         // Default: 10,000
+    recovery?: boolean;                   // Default: true
+    recoveryTimeoutMs?: number;           // Default: 15,000
+    recoveryBackoffMs?: number;           // Default: 2,000
+    recoveryRetries?: number;             // Default: 4
+    flushTimeoutMs?: number;              // Default: 300,000
+    serverLackOfAckTimeoutMs?: number;    // Default: 60,000
+    streamPausedMaxWaitTimeMs?: number;   // Default: undefined (wait for full server duration)
 }
 
 enum RecordType {
@@ -1203,7 +1217,7 @@ This SDK wraps the high-performance [Rust Zerobus SDK](https://github.com/databr
 ```
 
 **Benefits:**
-- **Zero-copy data transfer** between JavaScript and Rust
+- **Native performance** - Rust implementation for high-throughput ingestion
 - **Native async/await support** - Rust futures become JavaScript Promises
 - **Automatic memory management** - No manual cleanup required
 - **Type safety** - Compile-time checks on both sides
