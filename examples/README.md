@@ -1,255 +1,202 @@
-# Zerobus SDK Examples
+# Zerobus TypeScript SDK Examples
 
-This directory contains example applications demonstrating the Zerobus Ingest SDK for TypeScript.
+This directory contains examples demonstrating how to use the Zerobus TypeScript SDK to ingest data into Databricks Delta tables.
 
-## Examples Overview
+## Table of Contents
 
-1. **`json.ts`** - JSON ingestion with individual and batch records
-2. **`proto.ts`** - Protocol Buffers ingestion with individual and batch records
-3. **`parallel_streams.ts`** - Multiple parallel streams for high throughput
+- [Overview](#overview)
+- [JSON Examples](json/README.md)
+- [Protocol Buffers Examples](proto/README.md)
+- [Arrow Flight Examples](arrow/README.md) (Experimental)
+- [Prerequisites](#prerequisites)
+- [Common Code Patterns](#common-code-patterns)
+- [API Styles](#api-styles)
+- [Single-Record vs Batch Ingestion](#single-record-vs-batch-ingestion)
+- [Choosing a Format](#choosing-a-format)
 
-Each example demonstrates:
-- Creating a stream
-- Ingesting 100 individual records with `ingestRecord()`
-- Ingesting 10 records as a batch with `ingestRecords()`
-- Type widening (high-level vs low-level serialization)
-- Flushing and closing the stream
-- Error recovery with `recreateStream()` (see README.md for detailed patterns)
+## Overview
 
-## Setup
+The SDK supports three serialization formats and two ingestion methods:
 
-### 1. Install Dependencies
+**Serialization Formats:**
+- **[JSON](json/README.md)** - Simpler, no schema generation required. Great for getting started.
+- **[Protocol Buffers](proto/README.md)** - Type-safe with compile-time validation. Better for production.
+- **[Arrow Flight](arrow/README.md)** - High-performance columnar format for analytics. **(Experimental/Unsupported)**
 
-```bash
-npm install
-npm run build
-```
+**Ingestion Methods:**
+- **Single-record** (`ingestRecordOffset`) - Ingest records one at a time
+- **Batch** (`ingestRecordsOffset`) - Ingest multiple records at once with all-or-nothing semantics
 
-### 2. Generate Protocol Buffers (for proto.ts example)
+**Available Examples:**
 
-```bash
-# Generate TypeScript code and descriptor file
-npm run build:proto
-```
+| Example | Format | Method | Script |
+|---------|--------|--------|--------|
+| [JSON Single](json/README.md#single-record-example) | JSON | Single-record | `npm run example:json:single` |
+| [JSON Batch](json/README.md#batch-example) | JSON | Batch | `npm run example:json:batch` |
+| [Proto Single](proto/README.md#single-record-example) | Protocol Buffers | Single-record | `npm run example:proto:single` |
+| [Proto Batch](proto/README.md#batch-example) | Protocol Buffers | Batch | `npm run example:proto:batch` |
+| [Arrow Single](arrow/README.md#single-record-example) | Arrow Flight | Single-batch | `npm run example:arrow:single` |
+| [Arrow Batch](arrow/README.md#batch-example) | Arrow Flight | Multi-row batch | `npm run example:arrow:batch` |
 
-This generates:
-- `examples/generated/air_quality.js` - TypeScript bindings
-- `examples/generated/air_quality.d.ts` - Type definitions
-- `schemas/air_quality_descriptor.pb` - Descriptor file for SDK
+## Prerequisites
 
-### 3. Create a Databricks Table
+### 1. Create a Databricks Table
 
-Before running the examples, create a table in your Databricks workspace using the following SQL:
+Create a table in your Databricks workspace:
 
 ```sql
 CREATE TABLE catalog.schema.air_quality (
-    device_name STRING,
-    temp INT,
-    humidity BIGINT
-)
-USING DELTA;
+  device_name STRING,
+  temp INT,
+  humidity BIGINT
+);
 ```
 
-Replace `catalog.schema.air_quality` with your actual catalog, schema, and table name.
+### 2. Set Up OAuth Service Principal
 
-**Note:** This schema matches the examples (`json.ts` and `proto.ts`). The examples use these fields:
-- `device_name` (STRING) - Sensor device identifier
-- `temp` (INT) - Temperature reading
-- `humidity` (BIGINT) - Humidity reading
+1. In your Databricks workspace, go to **Settings** > **Identity and Access**
+2. Create a service principal or use an existing one
+3. Generate OAuth credentials (client ID and secret)
+4. Grant the service principal these permissions on your table:
+   - `SELECT` - Read table schema
+   - `MODIFY` - Write data to the table
+   - `USE CATALOG` and `USE SCHEMA` - Access catalog and schema
 
-If you modify the table schema, make sure to update the example code and Protocol Buffer schema (`schemas/air_quality.proto`) accordingly.
-
-### 4. Configure Credentials
+### 3. Configure Environment Variables
 
 Set the following environment variables:
 
 ```bash
-# Required for all examples
-export DATABRICKS_CLIENT_ID="your-service-principal-application-id"
-export DATABRICKS_CLIENT_SECRET="your-service-principal-secret"
-export ZEROBUS_TABLE_NAME="catalog.schema.table"
-
-# For AWS
 export ZEROBUS_SERVER_ENDPOINT="workspace-id.zerobus.region.cloud.databricks.com"
 export DATABRICKS_WORKSPACE_URL="https://your-workspace.cloud.databricks.com"
-
-# For Azure
-export ZEROBUS_SERVER_ENDPOINT="workspace-id.zerobus.region.azuredatabricks.net"
-export DATABRICKS_WORKSPACE_URL="https://your-workspace.azuredatabricks.net"
+export ZEROBUS_TABLE_NAME="catalog.schema.air_quality"
+export DATABRICKS_CLIENT_ID="your-client-id"
+export DATABRICKS_CLIENT_SECRET="your-client-secret"
 ```
 
-## Running Examples
+## Common Code Patterns
 
-### JSON Ingestion
+All examples follow the same general flow:
 
-```bash
-npm run example:json
-# or
-npx tsx examples/json.ts
-```
-
-**Features demonstrated:**
-- JSON record type configuration
-- Type 1: Passing objects (high-level) - SDK auto-stringifies
-- Type 2: Passing strings (low-level) - pre-serialized JSON
-- Individual record ingestion (100 records)
-- Batch ingestion (10 records)
-- Recovery methods: `getUnackedRecords()` and `getUnackedBatches()`
-
-### Protocol Buffers Ingestion
-
-```bash
-npm run example:proto
-# or
-npx tsx examples/proto.ts
-```
-
-**Features demonstrated:**
-- Protocol Buffers record type configuration (default)
-- Descriptor loading with `loadDescriptorProto()`
-- Type 3: Passing Message objects (high-level) - SDK auto-serializes
-- Type 4: Passing Buffers (low-level) - pre-serialized bytes
-- Individual record ingestion (100 records)
-- Batch ingestion (10 records)
-- Recovery methods: `getUnackedRecords()` and `getUnackedBatches()`
-
-### Parallel Streams
-
-```bash
-npm run example:parallel
-# or
-npx tsx examples/parallel_streams.ts
-```
-
-**Features demonstrated:**
-- Multiple concurrent streams
-- High-throughput parallel ingestion
-- Independent error handling per stream
-
-## Type Widening
-
-The SDK supports 4 input types across JSON and Protocol Buffers modes:
-
-### JSON Mode (RecordType.Json)
+### 1. Initialize SDK
 
 ```typescript
-// Type 1: object (high-level) - SDK auto-stringifies
-await stream.ingestRecord({ device: 'sensor-1', temp: 25 });
-
-// Type 2: string (low-level) - pre-serialized
-await stream.ingestRecord(JSON.stringify({ device: 'sensor-1', temp: 25 }));
+const sdk = new ZerobusSdk(SERVER_ENDPOINT, DATABRICKS_WORKSPACE_URL);
 ```
 
-### Protocol Buffers Mode (RecordType.Proto)
+### 2. Configure Table Properties
 
+**JSON:**
 ```typescript
-// Type 3: Message object (high-level) - SDK auto-serializes
-const message = AirQuality.create({ device: 'sensor-1', temp: 25 });
-await stream.ingestRecord(message);
-
-// Type 4: Buffer (low-level) - pre-serialized bytes
-const buffer = Buffer.from(AirQuality.encode(message).finish());
-await stream.ingestRecord(buffer);
+const tableProperties: TableProperties = {
+    tableName: TABLE_NAME
+    // No descriptor needed for JSON
+};
 ```
 
-## Recovery and Error Handling
+**Protocol Buffers:**
+```typescript
+const descriptorBase64 = loadDescriptorProto({ ... });
+const tableProperties: TableProperties = {
+    tableName: TABLE_NAME,
+    descriptorProto: descriptorBase64
+};
+```
 
-### Stream Recovery with recreateStream() (Recommended)
-
-The SDK provides `recreateStream()` as the **recommended approach** for recovering from stream failures. This method automatically handles the entire recovery process:
+### 3. Configure Stream Options
 
 ```typescript
-try {
-  await stream.ingestRecords(batch);
-} catch (error) {
-  // Close the stream first
-  await stream.close();
+const options: StreamConfigurationOptions = {
+    recordType: RecordType.Json,  // or RecordType.Proto
+    maxInflightRequests: 100,
+    recovery: true
+};
+```
 
-  // Optional: Inspect what needs recovery (must be called on closed stream)
-  const unackedBatches = await stream.getUnackedBatches();
-  console.log(`Batches to recover: ${unackedBatches.length}`);
+### 4. Create Stream
 
-  // Recreate stream with all unacked batches automatically re-ingested
-  const newStream = await sdk.recreateStream(stream);
-  console.log(`Stream recreated with ${unackedBatches.length} batches re-ingested`);
+```typescript
+const stream = await sdk.createStream(
+    tableProperties,
+    CLIENT_ID,
+    CLIENT_SECRET,
+    options
+);
+```
 
-  // Continue using newStream
+### 5. Ingest and Acknowledge
+
+```typescript
+const offset = await stream.ingestRecordOffset(data);
+await stream.waitForOffset(offset);
+```
+
+### 6. Close Stream
+
+```typescript
+await stream.close();
+```
+
+## API Styles
+
+The SDK provides two API styles for ingestion:
+
+| Style | Method | Returns | Promise resolves |
+|-------|--------|---------|------------------|
+| **Offset-based** (Recommended) | `ingestRecordOffset()` | `Promise<bigint>` | Immediately after queuing (before server ack) |
+| **Future-based** (Deprecated) | `ingestRecord()` | `Promise<bigint>` | After server acknowledgment |
+
+Both methods return `Promise<bigint>`, but the key difference is **when** the promise resolves:
+
+**Offset-based (Recommended):**
+```typescript
+// Promise resolves immediately with offset (doesn't wait for server ack)
+const offset = await stream.ingestRecordOffset(data);
+// Do other work, then wait for acknowledgment when needed
+await stream.waitForOffset(offset);
+```
+
+**Future-based (Deprecated):**
+```typescript
+// Promise blocks until server acknowledges - slower for high-throughput
+const offset = await stream.ingestRecord(data);
+```
+
+## Single-Record vs Batch Ingestion
+
+| Aspect | Single-Record | Batch |
+|--------|---------------|-------|
+| **Method** | `ingestRecordOffset()` | `ingestRecordsOffset()` |
+| **Use case** | Records arrive one at a time | Multiple records ready at once |
+| **Semantics** | Each record independent | All-or-nothing (atomic) |
+| **Acknowledgment** | Per record | Per batch |
+| **Throughput** | Lower | Higher |
+
+**Single-record:**
+```typescript
+for (const record of records) {
+    const offset = await stream.ingestRecordOffset(record);
+}
+await stream.flush();
+```
+
+**Batch:**
+```typescript
+const offset = await stream.ingestRecordsOffset(records);
+if (offset !== null) {
+    await stream.waitForOffset(offset);
 }
 ```
 
-**What `recreateStream()` does:**
-1. Retrieves all unacknowledged batches from the failed stream
-2. Creates a new stream with identical configuration (same table, auth, options)
-3. Re-ingests all unacknowledged batches in their original order
-4. Returns the new stream ready for continued ingestion
+## Choosing a Format
 
-**Benefits:**
-- **Automatic**: No manual batch tracking or re-ingestion logic needed
-- **Preserves structure**: Batches are re-ingested atomically as they were originally
-- **Configuration preserved**: New stream has identical settings to the original
-- **Single method call**: Simplifies error handling code
+| Feature | JSON | Protocol Buffers | Arrow Flight |
+|---------|------|------------------|--------------|
+| **Setup** | Simple - no schema files | Schema files required | Schema in code |
+| **Type Safety** | Runtime validation | Compile-time validation | Runtime validation |
+| **Performance** | Text-based | Efficient binary encoding | High-performance columnar |
+| **Flexibility** | Easy to modify | Schema changes require regeneration | Dynamic schema |
+| **Best For** | Prototyping, simple use cases | Production, high-throughput | Analytics, data science |
+| **Status** | Stable | Stable | Experimental/Unsupported |
 
-### Automatic Recovery for Transient Failures
-
-The SDK also includes automatic recovery for transient failures (enabled by default with `recovery: true`). This handles temporary network issues without requiring manual intervention.
-
-### Inspection Methods (For Debugging)
-
-These methods are primarily for debugging and understanding which records were not acknowledged.
-
-**Important:** These methods can **only be called on closed streams**. You must call `stream.close()` first.
-
-#### getUnackedRecords()
-
-Returns unacknowledged records as a flat array for inspection:
-
-```typescript
-await stream.close();  // Must close first
-const unackedRecords = await stream.getUnackedRecords();
-console.log(`Unacknowledged records: ${unackedRecords.length}`);
-```
-
-#### getUnackedBatches()
-
-Returns unacknowledged records grouped by their original batches for inspection:
-
-```typescript
-await stream.close();  // Must close first
-const unackedBatches = await stream.getUnackedBatches();
-console.log(`Unacknowledged batches: ${unackedBatches.length}`);
-```
-
-**Note:** When using `recreateStream()`, these inspection methods are optional - the recreation process automatically handles all unacknowledged batches.
-
-## Troubleshooting
-
-### "protoc: command not found"
-Install Protocol Buffer compiler:
-```bash
-# macOS
-brew install protobuf
-
-# Ubuntu/Debian
-sudo apt-get install protobuf-compiler
-
-# Windows
-choco install protoc
-```
-
-### "Cannot find module './generated/air_quality'" or "Descriptor file not found"
-Run the proto build script (generates both TypeScript files and descriptor):
-```bash
-npm run build:proto
-```
-
-### Authentication errors
-Verify your service principal has the required permissions:
-- `USE_CATALOG` on the catalog
-- `USE_SCHEMA` on the schema
-- `SELECT` and `MODIFY` on the table
-
-## Next Steps
-
-- See the [main README](../README.md) for complete SDK documentation
-- Review the [API Reference](../README.md#api-reference) for all available methods
-- Check the [Configuration](../README.md#configuration) section for stream tuning options
+**Recommendation:** Start with JSON for quick prototyping, then migrate to Protocol Buffers for production row-oriented workloads. Use Arrow Flight (when stable) for analytics and columnar workloads.

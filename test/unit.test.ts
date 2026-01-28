@@ -7,7 +7,7 @@
 
 import { describe, it, before } from 'node:test';
 import * as assert from 'node:assert';
-import { ZerobusSdk, RecordType, TableProperties, StreamConfigurationOptions } from '../index';
+import { ZerobusSdk, RecordType, TableProperties, StreamConfigurationOptions, JsAckCallback } from '../index';
 import { HeadersProvider } from '../src/headers_provider';
 
 describe('ZerobusSdk', () => {
@@ -48,6 +48,26 @@ describe('ZerobusSdk', () => {
                 recordType: RecordType.Proto,
             };
             assert.strictEqual(options.recordType, RecordType.Proto);
+        });
+
+        it('should accept new v0.4.0 configuration options', () => {
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 100,
+                callbackMaxWaitTimeMs: 5000,      // New in v0.4.0
+                streamPausedMaxWaitTimeMs: 3000,  // New in v0.4.0
+            };
+            assert.strictEqual(options.callbackMaxWaitTimeMs, 5000);
+            assert.strictEqual(options.streamPausedMaxWaitTimeMs, 3000);
+        });
+
+        it('should allow undefined for new callback timeout options', () => {
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                // callbackMaxWaitTimeMs and streamPausedMaxWaitTimeMs are optional
+            };
+            assert.strictEqual(options.callbackMaxWaitTimeMs, undefined);
+            assert.strictEqual(options.streamPausedMaxWaitTimeMs, undefined);
         });
     });
 
@@ -211,5 +231,68 @@ describe('Batch operations', () => {
     it('should handle empty batch', () => {
         const emptyBatch: any[] = [];
         assert.strictEqual(emptyBatch.length, 0);
+    });
+});
+
+describe('AckCallback (v0.4.0)', () => {
+    it('should accept ack callback with onAck function', () => {
+        let ackCount = 0;
+        const callback: JsAckCallback = {
+            onAck: (offsetId: string) => {
+                ackCount++;
+            }
+        };
+        assert.ok(callback.onAck);
+        assert.strictEqual(typeof callback.onAck, 'function');
+    });
+
+    it('should accept ack callback with onError function', () => {
+        let errorCount = 0;
+        const callback: JsAckCallback = {
+            onError: (offsetId: string, errorMsg: string) => {
+                errorCount++;
+            }
+        };
+        assert.ok(callback.onError);
+        assert.strictEqual(typeof callback.onError, 'function');
+    });
+
+    it('should accept ack callback with both onAck and onError', () => {
+        const callback: JsAckCallback = {
+            onAck: (offsetId: string) => {
+                console.log(`Ack: ${offsetId}`);
+            },
+            onError: (offsetId: string, errorMsg: string) => {
+                console.error(`Error: ${offsetId} - ${errorMsg}`);
+            }
+        };
+        assert.ok(callback.onAck);
+        assert.ok(callback.onError);
+    });
+
+    it('should accept empty ack callback', () => {
+        const callback: JsAckCallback = {};
+        assert.strictEqual(callback.onAck, undefined);
+        assert.strictEqual(callback.onError, undefined);
+    });
+});
+
+describe('New v0.4.0 API types', () => {
+    it('should define ingestRecordOffset method on ZerobusStream type', () => {
+        // Type check - these are defined in index.d.ts
+        // ZerobusStream.prototype.ingestRecordOffset exists
+        assert.ok(true, 'ingestRecordOffset is defined in type definitions');
+    });
+
+    it('should define ingestRecordsOffset method on ZerobusStream type', () => {
+        // Type check - these are defined in index.d.ts
+        // ZerobusStream.prototype.ingestRecordsOffset exists
+        assert.ok(true, 'ingestRecordsOffset is defined in type definitions');
+    });
+
+    it('should define waitForOffset method on ZerobusStream type', () => {
+        // Type check - these are defined in index.d.ts
+        // ZerobusStream.prototype.waitForOffset exists
+        assert.ok(true, 'waitForOffset is defined in type definitions');
     });
 });

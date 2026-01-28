@@ -1,5 +1,34 @@
 # Version changelog
 
+## Release v0.2.0
+
+### New Features and Improvements
+
+- Upgraded to Rust SDK v0.4.0
+- Added new offset-based ingestion APIs for better high-throughput patterns:
+  - `ingestRecordOffset()` - Returns offset immediately after queuing
+  - `ingestRecordsOffset()` - Batch version, returns offset immediately
+  - `waitForOffset()` - Wait for specific offset to be acknowledged
+- Added experimental Arrow Flight support (behind feature flag)
+- Added `streamPausedMaxWaitTimeMs` configuration option
+- Set user agent to identify as `zerobus-sdk-ts/0.2.0`
+- Reorganized examples into `json/`, `proto/`, `arrow/` directories
+
+### API Changes
+
+- **New (Recommended):** `ingestRecordOffset()`, `ingestRecordsOffset()`, `waitForOffset()`
+- **Deprecated:** `ingestRecord()`, `ingestRecords()` - still work but return Promise that blocks until ack
+- Added `streamPausedMaxWaitTimeMs` to `StreamConfigurationOptions`
+- Custom `headers_provider` now automatically includes TS SDK user agent if not specified
+
+### Documentation
+
+- Updated README with new APIs and deprecation notices
+- Reorganized examples with separate directories for each format
+- Added Arrow Flight examples (experimental)
+
+---
+
 ## Release v0.1.0
 
 Initial release of the Databricks Zerobus Ingest SDK for TypeScript.
@@ -38,4 +67,4 @@ Initial release of the Databricks Zerobus Ingest SDK for TypeScript.
 - Protocol Buffer setup instructions
 - Type mapping guide (Delta ↔ Proto)
 - API reference documentation
-- Examples: `json.ts`, `proto.ts`, `parallel_streams.ts`
+- Examples for JSON and Protocol Buffers ingestion

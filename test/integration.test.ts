@@ -201,6 +201,121 @@ describe('Integration Tests', { skip: SKIP_INTEGRATION }, () => {
         });
     });
 
+    describe('Offset-based API (v0.4.0)', () => {
+        it('should ingest single record with ingestRecordOffset and waitForOffset', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 100,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const record = { device_name: 'offset-api-test', temp: 25, humidity: 60 };
+                const offsetId = await stream.ingestRecordOffset(record);
+                assert.ok(typeof offsetId === 'bigint');
+                assert.ok(offsetId >= 0n);
+
+                // Wait for acknowledgment
+                await stream.waitForOffset(offsetId);
+            } finally {
+                await stream.close();
+            }
+        });
+
+        it('should ingest batch with ingestRecordsOffset and waitForOffset', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 100,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const records = Array.from({ length: 5 }, (_, i) => ({
+                    device_name: `offset-batch-${i}`,
+                    temp: 20 + i,
+                    humidity: 50 + i,
+                }));
+
+                const offsetId = await stream.ingestRecordsOffset(records);
+                assert.ok(offsetId === null || typeof offsetId === 'bigint');
+
+                if (offsetId !== null) {
+                    await stream.waitForOffset(offsetId);
+                }
+            } finally {
+                await stream.close();
+            }
+        });
+
+        it('should handle high-throughput pattern: send many, wait once', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+                maxInflightRequests: 1000,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                let lastOffset: bigint = BigInt(0);
+
+                // Send 10 records quickly
+                for (let i = 0; i < 10; i++) {
+                    lastOffset = await stream.ingestRecordOffset({
+                        device_name: `high-throughput-${i}`,
+                        temp: 20 + i,
+                        humidity: 50 + i,
+                    });
+                }
+
+                // Wait for last offset only (implies all previous are acknowledged)
+                await stream.waitForOffset(lastOffset);
+            } finally {
+                await stream.close();
+            }
+        });
+
+        it('should return null for empty batch with ingestRecordsOffset', async () => {
+            const tableProperties: TableProperties = { tableName };
+            const options: StreamConfigurationOptions = {
+                recordType: RecordType.Json,
+            };
+
+            const stream = await sdk.createStream(
+                tableProperties,
+                clientId,
+                clientSecret,
+                options
+            );
+
+            try {
+                const offsetId = await stream.ingestRecordsOffset([]);
+                assert.strictEqual(offsetId, null);
+            } finally {
+                await stream.close();
+            }
+        });
+    });
+
     describe('Stream recovery', () => {
         it('should retrieve unacked records after close', async () => {
             const tableProperties: TableProperties = { tableName };
