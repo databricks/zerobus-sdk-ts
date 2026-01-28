@@ -13,6 +13,7 @@
 #![deny(clippy::all)]
 
 use napi::bindgen_prelude::*;
+use napi::threadsafe_function::{ThreadsafeFunction, ErrorStrategy};
 use napi::{Env, JsObject, JsFunction, JsUnknown, JsString, JsGlobal, ValueType};
 use napi_derive::napi;
 
@@ -23,6 +24,7 @@ use databricks_zerobus_ingest_sdk::{
     ZerobusStream as RustZerobusStream,
     HeadersProvider as RustHeadersProvider,
     ZerobusResult as RustZerobusResult,
+    ZerobusError as RustZerobusError,
     DefaultTokenFactory,
 };
 use databricks_zerobus_ingest_sdk::databricks::zerobus::RecordType as RustRecordType;
@@ -716,6 +718,84 @@ impl ZerobusStream {
     }
 }
 
+/// JavaScript headers provider callback wrapper.
+///
+/// Allows TypeScript code to provide custom authentication headers
+/// by implementing a getHeaders() function.
+#[napi(object)]
+pub struct JsHeadersProvider {
+    /// JavaScript function: () => Promise<Array<[string, string]>>
+    pub get_headers_callback: JsFunction,
+}
+
+/// Internal adapter that wraps static headers as a HeadersProvider
+/// This is used for custom authentication in the TypeScript SDK
+struct StaticHeadersProvider {
+    headers: HashMap<&'static str, String>,
+}
+
+impl StaticHeadersProvider {
+    fn new(headers: Vec<(String, String)>) -> RustZerobusResult<Self> {
+        // Convert Vec<(String, String)> to HashMap<&'static str, String>
+        // We need to leak strings to get 'static lifetime for keys
+        let mut map = HashMap::new();
+        for (k, v) in headers {
+            let static_key: &'static str = Box::leak(k.into_boxed_str());
+            map.insert(static_key, v);
+        }
+
+        if !map.contains_key("authorization") {
+            return Err(RustZerobusError::InvalidArgument(
+                "HeadersProvider must include 'authorization' header with Bearer token".to_string()
+            ));
+        }
+        if !map.contains_key("x-databricks-zerobus-table-name") {
+            return Err(RustZerobusError::InvalidArgument(
+                "HeadersProvider must include 'x-databricks-zerobus-table-name' header".to_string()
+            ));
+        }
+
+        // Add TS user agent if not provided
+        if !map.contains_key("user-agent") {
+            map.insert("user-agent", TS_SDK_USER_AGENT.to_string());
+        }
+
+        Ok(Self { headers: map })
+    }
+}
+
+#[async_trait]
+impl RustHeadersProvider for StaticHeadersProvider {
+    async fn get_headers(&self) -> RustZerobusResult<HashMap<&'static str, String>> {
+        Ok(self.headers.clone())
+    }
+}
+
+/// Helper to create a threadsafe function from JavaScript callback
+fn create_headers_tsfn(js_func: JsFunction) -> Result<ThreadsafeFunction<(), ErrorStrategy::Fatal>> {
+    js_func.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value]))
+}
+
+/// Helper to call headers callback and get result
+async fn call_headers_tsfn(tsfn: ThreadsafeFunction<(), ErrorStrategy::Fatal>) -> Result<Vec<(String, String)>> {
+    let raw_headers: Vec<Vec<String>> = tsfn.call_async(())
+        .await
+        .map_err(|e| Error::from_reason(format!("Failed to call headers callback: {}", e)))?;
+
+    let headers: Vec<(String, String)> = raw_headers
+        .into_iter()
+        .filter_map(|pair| {
+            if pair.len() >= 2 {
+                Some((pair[0].clone(), pair[1].clone()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(headers)
+}
+
 /// OAuth headers provider for TypeScript SDK.
 /// Uses the Rust SDK's token factory but with the TS user agent.
 /// No memory leaks - all header keys are static string literals.
@@ -828,17 +908,21 @@ impl ZerobusSdk {
         })
     }
 
-    /// Creates a new ingestion stream to a Delta table using OAuth 2.0 authentication.
+    /// Creates a new ingestion stream to a Delta table.
     ///
     /// This method establishes a bidirectional gRPC connection to the Zerobus service
-    /// and prepares it for data ingestion using OAuth 2.0 Client Credentials flow.
+    /// and prepares it for data ingestion. By default, it uses OAuth 2.0 Client Credentials
+    /// authentication. For custom authentication (e.g., Personal Access Tokens), provide
+    /// a custom headers_provider.
     ///
     /// # Arguments
     ///
     /// * `table_properties` - Properties of the target table including name and optional schema
-    /// * `client_id` - OAuth 2.0 client ID
-    /// * `client_secret` - OAuth 2.0 client secret
+    /// * `client_id` - OAuth 2.0 client ID (ignored if headers_provider is provided)
+    /// * `client_secret` - OAuth 2.0 client secret (ignored if headers_provider is provided)
     /// * `options` - Optional stream configuration (timeouts, recovery settings, etc.)
+    /// * `headers_provider` - Optional custom headers provider for authentication.
+    ///   If not provided, uses OAuth with client_id and client_secret.
     ///
     /// # Returns
     ///
@@ -854,10 +938,25 @@ impl ZerobusSdk {
     /// # Example
     ///
     /// ```typescript
+    /// // OAuth authentication (default)
     /// const stream = await sdk.createStream(
     ///   { tableName: "catalog.schema.table" },
     ///   "client-id",
     ///   "client-secret"
+    /// );
+    ///
+    /// // Custom authentication with headers provider
+    /// const stream = await sdk.createStream(
+    ///   { tableName: "catalog.schema.table" },
+    ///   "", // ignored
+    ///   "", // ignored
+    ///   undefined,
+    ///   {
+    ///     getHeadersCallback: async () => [
+    ///       ["authorization", `Bearer ${myToken}`],
+    ///       ["x-databricks-zerobus-table-name", tableName]
+    ///     ]
+    ///   }
     /// );
     /// ```
     #[napi(ts_return_type = "Promise<ZerobusStream>")]
@@ -868,9 +967,17 @@ impl ZerobusSdk {
         client_id: String,
         client_secret: String,
         options: Option<StreamConfigurationOptions>,
+        headers_provider: Option<JsHeadersProvider>,
     ) -> Result<JsObject> {
         let rust_table_props = table_properties.to_rust()?;
         let rust_options: RustStreamOptions = options.map(|o| o.into()).unwrap_or_default();
+
+        let headers_tsfn = match headers_provider {
+            Some(JsHeadersProvider { get_headers_callback }) => {
+                Some(create_headers_tsfn(get_headers_callback)?)
+            }
+            None => None,
+        };
 
         let sdk = self.inner.clone();
         let workspace_id = self.workspace_id.clone();
@@ -879,19 +986,30 @@ impl ZerobusSdk {
 
         env.execute_tokio_future(
             async move {
-                // Use OAuth with TS user agent
-                let headers_provider = Arc::new(TsOAuthHeadersProvider::new(
-                    client_id,
-                    client_secret,
-                    table_name,
-                    workspace_id,
-                    unity_catalog_url,
-                ));
+                let headers_provider_arc: Arc<dyn RustHeadersProvider> = if let Some(tsfn) = headers_tsfn {
+                    // Custom headers provider from JavaScript callback
+                    let headers = call_headers_tsfn(tsfn).await
+                        .map_err(|e| napi::Error::from_reason(format!("Headers callback failed: {}", e)))?;
+
+                    let static_provider = StaticHeadersProvider::new(headers)
+                        .map_err(|e| napi::Error::from_reason(format!("Invalid headers: {}", e)))?;
+
+                    Arc::new(static_provider)
+                } else {
+                    // Default OAuth with TS user agent
+                    Arc::new(TsOAuthHeadersProvider::new(
+                        client_id,
+                        client_secret,
+                        table_name,
+                        workspace_id,
+                        unity_catalog_url,
+                    ))
+                };
 
                 let stream = sdk
                     .create_stream_with_headers_provider(
                         rust_table_props,
-                        headers_provider,
+                        headers_provider_arc,
                         Some(rust_options),
                     )
                     .await

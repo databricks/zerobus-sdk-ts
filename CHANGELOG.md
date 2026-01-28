@@ -11,15 +11,15 @@
   - `waitForOffset()` - Wait for specific offset to be acknowledged
 - Added experimental Arrow Flight support (behind feature flag)
 - Added `streamPausedMaxWaitTimeMs` configuration option
-- Fixed user agent to correctly identify as `zerobus-sdk-ts/0.2.0`
+- Set user agent to identify as `zerobus-sdk-ts/0.2.0`
 - Reorganized examples into `json/`, `proto/`, `arrow/` directories
 
 ### API Changes
 
 - **New (Recommended):** `ingestRecordOffset()`, `ingestRecordsOffset()`, `waitForOffset()`
 - **Deprecated:** `ingestRecord()`, `ingestRecords()` - still work but return Promise that blocks until ack
-- Removed `headers_provider` parameter from `createStream()` (custom auth not yet supported)
 - Added `streamPausedMaxWaitTimeMs` to `StreamConfigurationOptions`
+- Custom `headers_provider` now automatically includes TS SDK user agent if not specified
 
 ### Documentation
 

@@ -731,7 +731,28 @@ The SDK automatically fetches access tokens and includes these headers:
 
 ### Custom Authentication
 
-The SDK currently supports OAuth 2.0 Client Credentials authentication. Support for custom authentication methods (such as Personal Access Tokens) may be added in a future release.
+Beyond OAuth, you can use custom headers for Personal Access Tokens (PAT) or other auth methods:
+
+```typescript
+const stream = await sdk.createStream(
+  tableProperties,
+  '', // client_id (ignored when headers_provider is provided)
+  '', // client_secret (ignored when headers_provider is provided)
+  options,
+  {
+    getHeadersCallback: async () => [
+      ["authorization", `Bearer ${myToken}`],
+      ["x-databricks-zerobus-table-name", tableName]
+    ]
+  }
+);
+```
+
+**Required headers:**
+- `authorization` - Bearer token or other auth header
+- `x-databricks-zerobus-table-name` - The fully qualified table name
+
+**Note:** The SDK automatically adds the `user-agent` header if not provided.
 
 ## Configuration
 
